@@ -23,3 +23,10 @@ services:
     volumes:
       - ./metrics.csv:/app/metrics.csv:ro
     restart: unless-stopped
+
+  bench-json:
+    build: ./http-arena
+    container_name: bench-json
+    ports:
+      - "8000:8000"
+    restart: unless-stopped

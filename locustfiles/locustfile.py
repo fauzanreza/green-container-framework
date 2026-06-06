@@ -34,7 +34,7 @@ class BenchUser(HttpUser):
     @task(2)
     def static_endpoint(self):
         """Static Files — throughput murni."""
-        with self.client.get("/", name="Static-Files", catch_response=True) as resp:
+        with self.client.get("/static/dummy.txt", name="Static-Files", catch_response=True) as resp:
             if resp.status_code == 200:
                 resp.success()
             else:
