@@ -49,12 +49,34 @@ HGCF uses a linear CPU-to-power mathematical model completely omitting the need 
 
 ## 📊 Comprehensive 17 Metrics Evaluation
 
-The architecture maps completely to 5 Evaluation Pillars comprising 17 key metrics:
-1. **Resource Stability** (CPU/RAM Means & Variances)
-2. **Operational Performance** (Throughput, Latency, Error Rate) via *Locust Load Generator*.
-3. **Energy Efficiency** (Power Mean, Idle Resource Waste, PPW).
-4. **Environmental Impact** ($CO_2e$ estimate, Carbon per Task).
-5. **Meta-Metrics** (Framework Overhead CPU/RAM).
+The architecture maps completely to 5 Evaluation Pillars comprising precisely 17 key metrics, rigorously linking theoretical hypotheses (H1, H2) with Research Questions (RQ1, RQ2):
+
+### Pilar 1: Resource Stability
+1. **CPU Utilization (mean)** `[%]` - H1 (RQ2)
+2. **CPU Variance** `[%²]` - H1 (RQ2)
+3. **Memory Usage (mean)** `[GB]` - H1 (RQ2)
+4. **Memory Variance** `[%²]` - H1 (RQ2)
+
+### Pilar 2: Operational Performance (via Locust)
+5. **Latency Average** `[ms]` - H2 (RQ2)
+6. **Latency p95** `[ms]` - H2 (RQ2)
+7. **Throughput** `[req/s]` - H2 (RQ2)
+8. **Error Rate** `[%]` - H2 (RQ2)
+9. **Container Restart** `[count]` - H2 (RQ2)
+
+### Pilar 3: Energy & Efficiency
+10. **Power Consumption (mean)** `[Watt]` - H1 (RQ2)
+11. **Energy Consumption (total)** `[kWh]` - H1 (RQ2)
+12. **Idle Resource Waste** `[%]` - H1 (RQ2)
+13. **Performance-per-Watt (PPW)** `[req/J]` - H1 (RQ2)
+
+### Pilar 4: Environmental Impact
+14. **Estimated CO₂e** `[gCO₂]` - H1 (RQ2)
+15. **Carbon per Task (CIT)** `[g/req]` - H1 (RQ2)
+16. **Thermal Stability** `[°C var]` - H2 (RQ2)
+
+### Pilar 5: Meta-Metrics
+17. **Framework Overhead** `[% CPU & RAM]` - H2 (RQ1)
 
 ---
 

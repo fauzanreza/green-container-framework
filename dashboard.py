@@ -45,7 +45,7 @@ HTML_TEMPLATE = """
             </div>
             <div class="col-md-3 mb-3">
                 <div class="card p-3">
-                    <div class="metric-label">Avg RAM Usage</div>
+                    <div class="metric-label">Memory Usage (Mean)</div>
                     <div class="metric-value" id="ram-mean">-- %</div>
                 </div>
             </div>
@@ -57,8 +57,8 @@ HTML_TEMPLATE = """
             </div>
             <div class="col-md-3 mb-3">
                 <div class="card p-3">
-                    <div class="metric-label">Total Est. Carbon (CO2e)</div>
-                    <div class="metric-value text-success" id="carbon-total">-- kg</div>
+                    <div class="metric-label">Estimated CO₂e</div>
+                    <div class="metric-value text-success" id="carbon-total">-- gCO₂</div>
                 </div>
             </div>
         </div>
@@ -77,16 +77,23 @@ HTML_TEMPLATE = """
                     <div class="card-header">17 Metrics Status</div>
                     <div class="card-body" style="font-size: 0.85rem;">
                         <ul class="list-group list-group-flush bg-transparent">
-                            <li class="list-group-item bg-transparent text-light border-secondary d-flex justify-content-between"><span>CPU Util & Variance (P1)</span> <span class="badge bg-success">Active</span></li>
-                            <li class="list-group-item bg-transparent text-light border-secondary d-flex justify-content-between"><span>Mem Util & Variance (P1)</span> <span class="badge bg-success">Active</span></li>
-                            <li class="list-group-item bg-transparent text-light border-secondary d-flex justify-content-between"><span>Power Consumption (P3)</span> <span class="badge bg-success">Active</span></li>
-                            <li class="list-group-item bg-transparent text-light border-secondary d-flex justify-content-between"><span>Total Energy kWh (P3)</span> <span class="badge bg-success">Active</span></li>
-                            <li class="list-group-item bg-transparent text-light border-secondary d-flex justify-content-between"><span>Estimated CO2e (P4)</span> <span class="badge bg-success">Active</span></li>
-                            <li class="list-group-item bg-transparent text-light border-secondary d-flex justify-content-between"><span>Framework Overhead (P5)</span> <span class="badge bg-warning text-dark">Partial</span></li>
-                            <li class="list-group-item bg-transparent text-light border-secondary d-flex justify-content-between"><span>Locust Latency & Tput (P2)</span> <span class="badge bg-secondary">Awaiting Merge</span></li>
-                            <li class="list-group-item bg-transparent text-light border-secondary d-flex justify-content-between"><span>Error Rate & Restarts (P2)</span> <span class="badge bg-secondary">Awaiting Merge</span></li>
-                            <li class="list-group-item bg-transparent text-light border-secondary d-flex justify-content-between"><span>PPW & CIT (P3/P4)</span> <span class="badge bg-secondary">Awaiting Merge</span></li>
-                            <li class="list-group-item bg-transparent text-light border-secondary d-flex justify-content-between"><span>Thermal Stability (P4)</span> <span class="badge bg-secondary">Pending Dev</span></li>
+                            <li class="list-group-item bg-transparent text-light border-secondary d-flex justify-content-between"><span>1. CPU Utilization (mean) (%)</span> <span class="badge bg-success">Active</span></li>
+                            <li class="list-group-item bg-transparent text-light border-secondary d-flex justify-content-between"><span>2. CPU Variance (%²)</span> <span class="badge bg-success">Active</span></li>
+                            <li class="list-group-item bg-transparent text-light border-secondary d-flex justify-content-between"><span>3. Memory Usage (mean) (GB)</span> <span class="badge bg-warning text-dark">Partial (%)</span></li>
+                            <li class="list-group-item bg-transparent text-light border-secondary d-flex justify-content-between"><span>4. Memory Variance (%²)</span> <span class="badge bg-success">Active</span></li>
+                            <li class="list-group-item bg-transparent text-light border-secondary d-flex justify-content-between"><span>5. Latency Average (ms)</span> <span class="badge bg-secondary">Awaiting Merge</span></li>
+                            <li class="list-group-item bg-transparent text-light border-secondary d-flex justify-content-between"><span>6. Latency p95 (ms)</span> <span class="badge bg-secondary">Awaiting Merge</span></li>
+                            <li class="list-group-item bg-transparent text-light border-secondary d-flex justify-content-between"><span>7. Throughput (req/s)</span> <span class="badge bg-secondary">Awaiting Merge</span></li>
+                            <li class="list-group-item bg-transparent text-light border-secondary d-flex justify-content-between"><span>8. Error Rate (%)</span> <span class="badge bg-secondary">Awaiting Merge</span></li>
+                            <li class="list-group-item bg-transparent text-light border-secondary d-flex justify-content-between"><span>9. Container Restart (count)</span> <span class="badge bg-secondary">Awaiting Merge</span></li>
+                            <li class="list-group-item bg-transparent text-light border-secondary d-flex justify-content-between"><span>10. Power Consumption (mean) (Watt)</span> <span class="badge bg-success">Active</span></li>
+                            <li class="list-group-item bg-transparent text-light border-secondary d-flex justify-content-between"><span>11. Energy Consumption (total) (kWh)</span> <span class="badge bg-success">Active</span></li>
+                            <li class="list-group-item bg-transparent text-light border-secondary d-flex justify-content-between"><span>12. Idle Resource Waste (%)</span> <span class="badge bg-secondary">Awaiting Merge</span></li>
+                            <li class="list-group-item bg-transparent text-light border-secondary d-flex justify-content-between"><span>13. Performance-per-Watt (req/J)</span> <span class="badge bg-secondary">Awaiting Merge</span></li>
+                            <li class="list-group-item bg-transparent text-light border-secondary d-flex justify-content-between"><span>14. Estimated CO₂e (gCO₂)</span> <span class="badge bg-success">Active</span></li>
+                            <li class="list-group-item bg-transparent text-light border-secondary d-flex justify-content-between"><span>15. Carbon per Task (g/req)</span> <span class="badge bg-secondary">Awaiting Merge</span></li>
+                            <li class="list-group-item bg-transparent text-light border-secondary d-flex justify-content-between"><span>16. Thermal Stability (°C var)</span> <span class="badge bg-secondary">Pending Dev</span></li>
+                            <li class="list-group-item bg-transparent text-light border-secondary d-flex justify-content-between"><span>17. Framework Overhead (% CPU & RAM)</span> <span class="badge bg-warning text-dark">Partial</span></li>
                         </ul>
                     </div>
                 </div>
@@ -155,7 +162,7 @@ HTML_TEMPLATE = """
                     document.getElementById('ram-mean').innerText = (memSum / metrics.length).toFixed(1) + ' %';
                     // Power per record is avg W at that moment, averaging further is fine
                     document.getElementById('power-mean').innerText = (powerSum / metrics.length).toFixed(1) + ' W';
-                    document.getElementById('carbon-total').innerText = maxCarbon.toFixed(4) + ' kg';
+                    document.getElementById('carbon-total').innerText = (maxCarbon * 1000).toFixed(2) + ' gCO₂';
 
                     resourceChart.data.labels = timeLabels;
                     resourceChart.data.datasets = Object.values(datasets);
