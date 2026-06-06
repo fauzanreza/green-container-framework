@@ -1,0 +1,25 @@
+version: "3.8"
+services:
+  hgcf:
+    build: .
+    container_name: hgcf
+    privileged: true
+    pid: host
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      - /proc/cpuinfo:/proc/cpuinfo:ro
+      - /proc/meminfo:/proc/meminfo:ro
+    environment:
+      - HGCF_TARGETS=""
+    restart: unless-stopped
+
+  hgcf-dashboard:
+    build: .
+    container_name: hgcf-dashboard
+    command: ["python", "dashboard.py"]
+    ports:
+      - "8092:8092"
+    volumes:
+      - ./metrics.csv:/app/metrics.csv:ro
+    restart: unless-stopped
