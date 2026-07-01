@@ -48,10 +48,9 @@ def main():
 
     # === CSV Initialization ===
     csv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "metrics.csv")
-    csv_is_new = not os.path.exists(csv_path)
-    with open(csv_path, "a", newline="") as f:
-        writer = csv.writer(f)
-        if csv_is_new:
+    if not os.path.exists(csv_path) or os.path.getsize(csv_path) == 0:
+        with open(csv_path, "w", newline="") as f:
+            writer = csv.writer(f)
             writer.writerow([
                 "time", "container_name", "cpu_percent", "mem_percent", 
                 "tier", "action", "power_watt", "energy_kwh", 

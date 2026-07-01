@@ -529,9 +529,12 @@ def api_metrics():
         return jsonify({"status": "empty", "data": []})
     
     data = []
+    fieldnames = ["time", "container_name", "cpu_percent", "mem_percent", "tier", "action", "power_watt", "energy_kwh", "ema_pred", "alpha", "spike_ratio", "p50", "p95", "overhead_cpu", "overhead_mem"]
     with open(csv_file, newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
+        reader = csv.DictReader(f, fieldnames=fieldnames)
+        for i, row in enumerate(reader):
+            if i == 0 and row["time"] == "time":
+                continue
             data.append(row)
     
     return jsonify({"status": "success", "data": data[-150:]})
