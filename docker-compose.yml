@@ -10,6 +10,8 @@ services:
       - /sys/fs/cgroup:/sys/fs/cgroup:rw
       - /proc/cpuinfo:/proc/cpuinfo:ro
       - /proc/meminfo:/proc/meminfo:ro
+      - ./metrics.csv:/app/metrics.csv
+      - ./framework_status.json:/app/framework_status.json
     environment:
       - HGCF_TARGETS=""
     restart: unless-stopped
@@ -22,7 +24,9 @@ services:
       - "8092:8092"
     volumes:
       - ./metrics.csv:/app/metrics.csv:ro
-    restart: unless-stopped
+      - ./framework_status.json:/app/framework_status.json
+      - /proc/cpuinfo:/proc/cpuinfo:ro
+      - /proc/meminfo:/proc/meminfo:ro
 
   bench-json:
     build: ./http-arena

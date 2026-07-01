@@ -49,7 +49,7 @@ def main():
     with open(csv_path, "a", newline="") as f:
         writer = csv.writer(f)
         if csv_is_new:
-            writer.writerow(["time", "container_name", "cpu_percent", "mem_percent", "tier", "action", "power_watt", "carbon_co2"])
+            writer.writerow(["time", "container_name", "cpu_percent", "mem_percent", "tier", "action", "power_watt", "carbon_co2", "afmv_pred", "alpha", "spike_ratio", "p50", "p95"])
 
     # === Inisialisasi komponen Layer 3 ===
     guardrail    = Guardrail()
@@ -61,7 +61,21 @@ def main():
 
     logger.info("Framework started. Menunggu %d detik sebelum sampling pertama...", current_interval)
 
+    # Flag for UI toggle
+    status_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "framework_status.json")
+    import json
+
     while True:
+        # Check toggle status
+        is_active = True
+        if os.path.exists(status_file):
+            try:
+                with open(status_file, "r") as sf:
+                    st = json.load(sf)
+                    is_active = st.get("active", True)
+            except:
+                pass
+
         time.sleep(current_interval)
 
         # === Layer 2: Discover containers (setiap iterasi agar deteksi container baru) ===
@@ -102,7 +116,10 @@ def main():
             guardrail_active = guardrail.update(name, cpu, mem)
 
             # === Layer 4: Adaptive Resource Shaping ===
-            if guardrail_active:
+            if not is_active:
+                action = "INACTIVE"
+                quota = CPU_QUOTA_SOFT
+            elif guardrail_active:
                 action = "GUARDRAIL"
                 quota = CPU_QUOTA_GUARDRAIL
             elif tier == TIER_AGGRESSIVE:
@@ -143,7 +160,12 @@ def main():
                         tier,
                         action,
                         f"{energy_data['power_watt']:.1f}",
-                        f"{energy_data['carbon_kgco2']:.4f}"
+                        f"{energy_data['carbon_kgco2']:.4f}",
+                        f"{afmv_pred:.1f}",
+                        f"{alpha:.3f}",
+                        f"{tier_stats['spike_ratio']:.2f}",
+                        f"{tier_stats['p50']:.1f}",
+                        f"{tier_stats['p95']:.1f}"
                     ])
             except Exception as e:
                 logger.error("Gagal menulis ke CSV: %s", e)
