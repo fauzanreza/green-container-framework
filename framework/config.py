@@ -1,66 +1,55 @@
-# framework/config.py
-# Konstanta HGCF — sesuaikan dengan hardware target
+import os
 
-# === Sampling ===
-SAMPLING_INTERVAL_NORMAL = 30   # detik saat CPU < 60%
-SAMPLING_INTERVAL_HIGH   = 10   # detik saat CPU >= 60%
-CPU_HIGH_THRESHOLD_SAMPLE = 60.0  # % untuk switch ke sampling cepat
+# framework/config.py
+# Constants for HECF (Hybrid Energy-Aware Container Framework)
+
+# === Sampling (Layer 2) ===
+SAMPLING_CPU_THRESHOLD   = float(os.getenv("HECF_SAMPLING_CPU_THRESHOLD", 60.0))
+SAMPLING_INTERVAL_HIGH   = int(os.getenv("HECF_SAMPLING_INTERVAL_HIGH", 10))
+SAMPLING_INTERVAL_LOW    = int(os.getenv("HECF_SAMPLING_INTERVAL_LOW", 30))
 
 # === Guardrail (Layer 3A) ===
-# Ref: Ahmad et al. (2025), Lorido-Botran (2014), Xu & Buyya (2019)
-GUARDRAIL_CPU_THRESHOLD   = 80.0  # % CPU overload threshold
-GUARDRAIL_MEM_THRESHOLD   = 90.0  # % memory overload threshold
-GUARDRAIL_WINDOW          = 5     # jumlah sampel terakhir yang dievaluasi
-GUARDRAIL_CONSECUTIVE     = 3     # dari GUARDRAIL_WINDOW sampel, berapa yang boleh melebihi
+GUARDRAIL_WINDOW         = int(os.getenv("HECF_GUARDRAIL_WINDOW", 5))
+GUARDRAIL_TRIGGER_COUNT  = int(os.getenv("HECF_GUARDRAIL_TRIGGER_COUNT", 3))
+GUARDRAIL_CPU_THRESHOLD  = float(os.getenv("HECF_GUARDRAIL_CPU_THRESHOLD", 80.0))
+GUARDRAIL_RAM_THRESHOLD  = float(os.getenv("HECF_GUARDRAIL_RAM_THRESHOLD", 90.0))
 
 # === Tier Detection (Layer 3B) ===
-# Ref: Hossain et al. (2022) — klasifikasi berbasis p95/p50 ratio
-SLIDING_WINDOW_SIZE       = 120   # jumlah sampel untuk sliding window CPU
-TIER_MIN_SAMPLES          = 120   # minimum sampel sebelum tier detection aktif
-TIER_AGGRESSIVE_RATIO     = 2.0   # p95/p50 > 2.0 → Tier 1 (Aggressive)
-TIER_BALANCED_RATIO       = 1.5   # p95/p50 antara 1.5-2.0 → Tier 2 (Balanced)
+TIER_WINDOW              = int(os.getenv("HECF_TIER_WINDOW", 120))
+COLD_START_SAMPLES       = int(os.getenv("HECF_COLD_START_SAMPLES", 120))
+FALLBACK_TIER            = int(os.getenv("HECF_FALLBACK_TIER", 2))
+TIER1_AGGRESSIVE_RATIO   = float(os.getenv("HECF_TIER1_RATIO", 2.0))
+TIER2_BALANCED_RATIO     = float(os.getenv("HECF_TIER2_RATIO", 1.5))
 
-# === AFMV Predictor (Layer 3C) ===
-# Ref: Hossain et al. (2022) — Adaptive Filter-based Moving Average
-# Formula: Y(k) = (1-α) × MV_w(k-1) + α × u(k)
-# α ditentukan dari STDEV window: STDEV tinggi → α besar
-AFMV_WINDOW_SIZE          = 5     # w dalam paper Hossain et al. (w=5 terbukti terbaik)
-AFMV_ALPHA_MIN            = 0.05
-AFMV_ALPHA_MAX            = 0.50
-# Normalisasi STDEV ke alpha: alpha = clip(stdev / AFMV_STDEV_SCALE, min, max)
-AFMV_STDEV_SCALE          = 20.0  # STDEV=20 → alpha=1.0 (sebelum clip)
+# === Predictor (Layer 3C) ===
+EMA_ALPHA                = float(os.getenv("HECF_EMA_ALPHA", 0.2))
 
-# === Energy Estimation (Layer 4) ===
-# Ref: Jarus et al. (2014) — model linear CPU-to-power, error < 4%
-# Hardware target: Intel i3 Gen 4 (i3-4130 atau sejenisnya)
-P_IDLE                    = 15.0  # Watt (idle power)
-P_MAX                     = 65.0  # Watt (TDP-based, sesuai proposal)
-CARBON_INTENSITY          = 0.78  # kgCO2/kWh (grid Indonesia, PLN)
+# === Framework Overhead Target ===
+FRAMEWORK_OVERHEAD_TARGET = float(os.getenv("HECF_OVERHEAD_TARGET", 5.0))
+
+# === Energy Estimation ===
+P_IDLE_WATTS             = float(os.getenv("HECF_P_IDLE_WATTS", 15.0))
+P_MAX_WATTS              = float(os.getenv("HECF_P_MAX_WATTS", 54.0))
 
 # === Container Shaping (Layer 4) ===
-# cpu_quota dalam microseconds per cpu_period
-CPU_PERIOD                = 100000  # 100ms (standar Linux cgroups)
-# Kuota per tier (dalam microseconds):
-# 0.5 core = 50000, 0.75 core = 75000, 0.9 core = 90000
-CPU_QUOTA_GUARDRAIL       = 50000   # Guardrail aktif: 0.5 core
-CPU_QUOTA_AGGRESSIVE      = 75000   # Tier 1 Aggressive: 0.75 core
-CPU_QUOTA_BALANCED        = 90000   # Tier 2 Balanced: 0.9 core
-CPU_QUOTA_SOFT            = -1      # Tier 3 Soft: hapus limit (unlimited)
+CPU_PERIOD               = 100000
+STATIC_CAP_CPU_PERCENT   = float(os.getenv("HECF_STATIC_CAP_CPU_PERCENT", 80.0))
+STATIC_CAP_QUOTA         = int((STATIC_CAP_CPU_PERCENT / 100.0) * CPU_PERIOD)
 
-# === Excluded Containers ===
-# Jangan di-shape container-container kritis ini
+# Precomputed microsecond limits based on general heuristics or host capacity:
+# Using same ratio pattern from previous implementation for tiers, but can be dynamic.
+CPU_QUOTA_GUARDRAIL      = 50000   # 0.5 core
+CPU_QUOTA_AGGRESSIVE     = 75000   # 0.75 core
+CPU_QUOTA_BALANCED       = 90000   # 0.9 core
+CPU_QUOTA_SOFT           = -1      # Unlimited
+
+# Excluded critical infrastructure (HECF itself, logging, DBs if not tagged properly)
 EXCLUDED_CONTAINERS = [
-    "hgcf",
-    "beszel-hub",
-    "beszel-agent",
-    "cloudflared-tunnel",
-    "ollama",
-    "locust",
-    "mysql-db",       # database jangan di-throttle
-    "bench-postgres",
+    "hecf",
+    "hecf-dashboard",
+    "locust"
 ]
 
-# === DRY RUN ===
-# True = hanya print keputusan, tidak benar-benar shape container
-# Set False setelah verifikasi log bersih > 10 menit
-DRY_RUN = True
+# Mode selection (default_docker, static_cap, reactive_only, full_hecf)
+MODE = os.getenv("HECF_MODE", "full_hecf")
+DRY_RUN = os.getenv("HECF_DRY_RUN", "False").lower() == "true"

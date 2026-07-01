@@ -1,81 +1,96 @@
 # framework/monitor.py
 # Layer 2: Monitoring Engine
-# Ref: Dinga et al. (2023) — overhead monitoring < 5%
-# Adaptive sampling: 10s saat CPU tinggi, 30s saat normal
+# Reads metrics directly from cgroupfs v2 to minimize overhead (<5%).
+# Adaptive sampling: 10s when CPU > 60%, 30s when normal.
 
-import docker
-from .config import CPU_HIGH_THRESHOLD_SAMPLE, SAMPLING_INTERVAL_NORMAL, SAMPLING_INTERVAL_HIGH
+import os
+import time
+from .config import SAMPLING_CPU_THRESHOLD, SAMPLING_INTERVAL_LOW, SAMPLING_INTERVAL_HIGH
 
 
-def get_container_stats(container_name: str) -> dict:
-    """
-    Ambil statistik CPU dan memori dari Docker Stats API.
-    Mengembalikan dict dengan cpu_percent, mem_percent, dll.
-    Mengembalikan None jika container tidak ditemukan atau error stats.
-    """
-    client = docker.from_env()
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
+class Monitor:
+    def __init__(self):
+        # container_name -> {"time": float, "usage_usec": int}
+        self._prev_stats = {}
+        
+    def _get_cgroup_path(self, container_id: str) -> str:
+        paths = [
+            f"/sys/fs/cgroup/system.slice/docker-{container_id}.scope",
+            f"/sys/fs/cgroup/docker/{container_id}",
+            f"/sys/fs/cgroup/system.slice/docker.service/docker-{container_id}.scope"
+        ]
+        for p in paths:
+            if os.path.exists(p):
+                return p
         return None
 
-    try:
-        raw = container.stats(stream=False)
-    except Exception:
-        return None
-
-    # === CPU % Calculation ===
-    # Ref: Docker Stats API documentation
-    # Perlu guard: precpu_stats bisa kosong di sample pertama
-    try:
-        cpu_delta = (
-            raw["cpu_stats"]["cpu_usage"]["total_usage"]
-            - raw["precpu_stats"]["cpu_usage"]["total_usage"]
-        )
-        system_delta = (
-            raw["cpu_stats"].get("system_cpu_usage", 0)
-            - raw["precpu_stats"].get("system_cpu_usage", 0)
-        )
-        # percpu_usage bisa tidak ada di beberapa versi Docker (cgroups v2)
-        num_cpus = len(
-            raw["cpu_stats"]["cpu_usage"].get("percpu_usage") or [1]
-        )
-        if system_delta > 0 and cpu_delta >= 0:
-            cpu_percent = (cpu_delta / system_delta) * num_cpus * 100.0
+    def get_stats(self, container_name: str, container_id: str) -> dict:
+        cgroup_path = self._get_cgroup_path(container_id)
+        if not cgroup_path:
+            return None
+            
+        now = time.time()
+        
+        # === Read CPU ===
+        try:
+            with open(os.path.join(cgroup_path, "cpu.stat")) as f:
+                usage_usec = 0
+                for line in f:
+                    if line.startswith("usage_usec"):
+                        usage_usec = int(line.split()[1])
+                        break
+        except OSError:
+            return None
+            
+        # === Read Memory ===
+        try:
+            with open(os.path.join(cgroup_path, "memory.current")) as f:
+                mem_usage = int(f.read().strip())
+        except OSError:
+            mem_usage = 0
+            
+        try:
+            with open(os.path.join(cgroup_path, "memory.max")) as f:
+                val = f.read().strip()
+                if val == "max":
+                    mem_limit = 1
+                else:
+                    mem_limit = int(val)
+        except OSError:
+            mem_limit = 1
+            
+        prev = self._prev_stats.get(container_name)
+        self._prev_stats[container_name] = {"time": now, "usage_usec": usage_usec}
+        
+        if prev:
+            time_delta = now - prev["time"]
+            usage_delta = (usage_usec - prev["usage_usec"]) / 1_000_000.0 # convert to seconds
+            if time_delta > 0:
+                cpu_percent = (usage_delta / time_delta) * 100.0
+            else:
+                cpu_percent = 0.0
         else:
             cpu_percent = 0.0
-    except (KeyError, ZeroDivisionError, TypeError):
-        cpu_percent = 0.0
-
-    # === Memory % Calculation ===
-    try:
-        mem_stats = raw.get("memory_stats", {})
-        mem_usage = mem_stats.get("usage", 0)
-        # 'cache' perlu dikurangi di cgroups v1 agar akurat
-        cache = mem_stats.get("stats", {}).get("cache", 0)
-        mem_usage = max(0, mem_usage - cache)
-        mem_limit = mem_stats.get("limit", 1)
-        mem_percent = (mem_usage / mem_limit * 100.0) if mem_limit > 0 else 0.0
-    except (KeyError, ZeroDivisionError, TypeError):
-        mem_percent = 0.0
-        mem_usage = 0
-        mem_limit = 1
-
-    return {
-        "name":        container_name,
-        "cpu_percent": round(cpu_percent, 2),
-        "mem_percent": round(mem_percent, 2),
-        "mem_usage":   mem_usage,
-        "mem_limit":   mem_limit,
-    }
+            
+        if mem_limit > 1:
+            mem_percent = (mem_usage / mem_limit) * 100.0
+        else:
+            mem_percent = 0.0 # Avoid division by max/1
+            
+        return {
+            "name": container_name,
+            "cpu_percent": round(max(0.0, cpu_percent), 2),
+            "mem_percent": round(max(0.0, mem_percent), 2),
+            "mem_usage": mem_usage,
+            "mem_limit": mem_limit
+        }
 
 
 def get_adaptive_interval(cpu_percent: float) -> int:
     """
     Adaptive sampling interval.
-    Ref: Dinga et al. (2023) — frekuensi monitoring dijaga overhead < 5%
-    CPU tinggi → sampling lebih sering untuk guardrail responsif.
+    High CPU -> frequent sampling for responsive guardrail.
     """
-    if cpu_percent >= CPU_HIGH_THRESHOLD_SAMPLE:
+    if cpu_percent >= SAMPLING_CPU_THRESHOLD:
         return SAMPLING_INTERVAL_HIGH
-    return SAMPLING_INTERVAL_NORMAL
+    return SAMPLING_INTERVAL_LOW

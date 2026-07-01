@@ -12,7 +12,7 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HGCF | Enterprise Green Framework Dashboard</title>
+    <title>HECF | Enterprise Dashboard</title>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -167,7 +167,7 @@ HTML_TEMPLATE = """
     <nav class="navbar navbar-dark navbar-glass mb-4 sticky-top">
         <div class="container-fluid px-4">
             <div class="d-flex align-items-center">
-                <span class="navbar-brand nav-brand mb-0">🌿 HGCF Enterprise</span>
+                <span class="navbar-brand nav-brand mb-0">🌿 HECF Enterprise</span>
                 <div class="ms-4 host-info d-none d-md-flex align-items-center" id="host-info-badge">
                     <span class="me-3">📡 <span id="host-name">Node</span></span>
                     <span class="me-3">⚙️ <span id="host-cpu">0</span> vCPU</span>
@@ -193,46 +193,56 @@ HTML_TEMPLATE = """
     </nav>
     <div class="container-fluid px-4 pb-5">
         
-        <!-- Key Metrics -->
-        <div class="row mb-4">
-            <div class="col-md-3 mb-3">
+        <!-- 5 Core Metrics (PRD §9) -->
+        <div class="row mb-4 row-cols-1 row-cols-md-5">
+            <div class="col mb-3">
                 <div class="glass-card p-4 h-100">
                     <div class="d-flex justify-content-between align-items-start mb-2">
-                        <div class="metric-label">Mean CPU Util</div>
-                        <span class="badge-layer">Layer 2 (Monitor)</span>
+                        <div class="metric-label">1. CPU Util</div>
+                        <span class="badge-layer">Metric 1</span>
                     </div>
                     <div class="metric-value" id="cpu-mean" style="background: linear-gradient(180deg, #7dd3fc, #0284c7); -webkit-background-clip: text;">-- %</div>
-                    <small class="text-muted">Avg across all containers</small>
+                    <small class="text-muted">Avg across targets</small>
                 </div>
             </div>
-            <div class="col-md-3 mb-3">
+            <div class="col mb-3">
                 <div class="glass-card p-4 h-100">
                     <div class="d-flex justify-content-between align-items-start mb-2">
-                        <div class="metric-label">Mean AFMV Pred</div>
-                        <span class="badge-layer">Layer 3C (Predictor)</span>
+                        <div class="metric-label">2. RAM Usage</div>
+                        <span class="badge-layer">Metric 2</span>
                     </div>
-                    <div class="metric-value" id="pred-mean" style="background: linear-gradient(180deg, #c084fc, #7e22ce); -webkit-background-clip: text;">-- %</div>
-                    <small class="text-muted">Next-tick CPU Prediction</small>
+                    <div class="metric-value" id="mem-mean" style="background: linear-gradient(180deg, #c084fc, #7e22ce); -webkit-background-clip: text;">-- %</div>
+                    <small class="text-muted">Avg across targets</small>
                 </div>
             </div>
-            <div class="col-md-3 mb-3">
+            <div class="col mb-3">
                 <div class="glass-card p-4 h-100">
                     <div class="d-flex justify-content-between align-items-start mb-2">
-                        <div class="metric-label">Avg Power Cons.</div>
-                        <span class="badge-layer">Energy Module</span>
+                        <div class="metric-label">3. Energy Cons.</div>
+                        <span class="badge-layer">Metric 3</span>
                     </div>
-                    <div class="metric-value" id="power-mean" style="background: linear-gradient(180deg, #fde047, #ca8a04); -webkit-background-clip: text;">-- W</div>
-                    <small class="text-muted">Linear Model Estimation</small>
-                </div>
-            </div>
-            <div class="col-md-3 mb-3">
-                <div class="glass-card p-4 h-100">
-                    <div class="d-flex justify-content-between align-items-start mb-2">
-                        <div class="metric-label">Carbon Footprint</div>
-                        <span class="badge-layer">Carbon Tracking</span>
-                    </div>
-                    <div class="metric-value" id="carbon-total" style="background: linear-gradient(180deg, #86efac, #16a34a); -webkit-background-clip: text;">-- kgCO₂</div>
+                    <div class="metric-value" id="energy-total" style="background: linear-gradient(180deg, #fde047, #ca8a04); -webkit-background-clip: text;">-- kWh</div>
                     <small class="text-muted">Total Accumulated</small>
+                </div>
+            </div>
+            <div class="col mb-3">
+                <div class="glass-card p-4 h-100">
+                    <div class="d-flex justify-content-between align-items-start mb-2">
+                        <div class="metric-label">4. Web Latency</div>
+                        <span class="badge-layer">Metric 4</span>
+                    </div>
+                    <div class="metric-value" id="latency-p95" style="background: linear-gradient(180deg, #86efac, #16a34a); -webkit-background-clip: text;">N/A</div>
+                    <small class="text-muted">Tracked via Locust</small>
+                </div>
+            </div>
+            <div class="col mb-3">
+                <div class="glass-card p-4 h-100">
+                    <div class="d-flex justify-content-between align-items-start mb-2">
+                        <div class="metric-label">5. FW Overhead</div>
+                        <span class="badge-layer">Metric 5</span>
+                    </div>
+                    <div class="metric-value" id="overhead-mean" style="background: linear-gradient(180deg, #fda4af, #e11d48); -webkit-background-clip: text;">-- %</div>
+                    <small class="text-muted">HECF CPU (Target &lt;5%)</small>
                 </div>
             </div>
         </div>
@@ -242,8 +252,8 @@ HTML_TEMPLATE = """
             <div class="col-md-8 mb-4">
                 <div class="glass-card h-100 p-4">
                     <div class="d-flex justify-content-between align-items-center mb-4">
-                        <h5 class="m-0 fw-bold">Live Resource & Prediction Trend</h5>
-                        <span class="badge-layer">Layer 2 & Layer 3 Integration</span>
+                        <h5 class="m-0 fw-bold">Live Resource Trend</h5>
+                        <span class="badge-layer">HECF Monitoring</span>
                     </div>
                     <div style="height: 350px;">
                         <canvas id="resourceChart"></canvas>
@@ -254,7 +264,7 @@ HTML_TEMPLATE = """
             <!-- Efficiency Highlights -->
             <div class="col-md-4 mb-4">
                 <div class="glass-card h-100 p-4 d-flex flex-column">
-                    <h5 class="fw-bold mb-4">Efficiency Highlights</h5>
+                    <h5 class="fw-bold mb-4">Control Plane Insights</h5>
                     
                     <div class="mb-4">
                         <div class="d-flex justify-content-between mb-1">
@@ -280,7 +290,7 @@ HTML_TEMPLATE = """
                             <div style="font-size: 2rem; margin-right: 15px;">🚀</div>
                             <div>
                                 <div class="fw-bold text-success mb-1">Framework Status</div>
-                                <div class="text-muted small">Adaptive Shaping (Layer 4) is controlling cgroups effectively.</div>
+                                <div class="text-muted small">Adaptive Shaping (Layer 4) is controlling cgroups effectively via cgroups v2.</div>
                             </div>
                         </div>
                     </div>
@@ -293,7 +303,7 @@ HTML_TEMPLATE = """
             <div class="col-12">
                 <div class="glass-card p-4">
                     <div class="d-flex justify-content-between align-items-center mb-4">
-                        <h5 class="m-0 fw-bold">Active Container Tracking (4-Layer Anatomy)</h5>
+                        <h5 class="m-0 fw-bold">Active Container Tracking (HECF 4-Layer Anatomy)</h5>
                     </div>
                     <div class="table-responsive">
                         <table class="table table-hover table-borderless">
@@ -303,14 +313,14 @@ HTML_TEMPLATE = """
                                     <th>L2: CPU %</th>
                                     <th>L2: MEM %</th>
                                     <th>L3B: Tier Class</th>
-                                    <th>L3C: AFMV Pred.</th>
+                                    <th>L3C: EMA Pred.</th>
                                     <th>L4: Shaper Action</th>
                                     <th>Power (W)</th>
                                 </tr>
                             </thead>
                             <tbody id="container-table-body">
                                 <tr>
-                                    <td colspan="7" class="text-center text-muted py-4">Waiting for HGCF Engine data...</td>
+                                    <td colspan="7" class="text-center text-muted py-4">Waiting for HECF Engine data...</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -328,7 +338,7 @@ HTML_TEMPLATE = """
             document.getElementById('host-ram').innerText = data.ram_mb ? (data.ram_mb / 1024).toFixed(1) : "0";
         });
 
-        // Chart configuration (Glassmorphism style)
+        // Chart configuration
         Chart.defaults.color = '#8b949e';
         Chart.defaults.font.family = "'Outfit', sans-serif";
         const ctx = document.getElementById('resourceChart').getContext('2d');
@@ -403,8 +413,9 @@ HTML_TEMPLATE = """
                 if (data.status === 'success' && data.data.length > 0) {
                     const metrics = data.data;
                     
-                    let cpuSum = 0; let memSum = 0; let powerSum = 0; let predSum = 0;
-                    let maxCarbon = 0; let spikeSum = 0; let guardrailCount = 0;
+                    let cpuSum = 0; let memSum = 0; let predSum = 0;
+                    let totalEnergy = 0; let spikeSum = 0; let guardrailCount = 0;
+                    let overheadCpuSum = 0;
                     
                     const timeLabels = [];
                     const datasets = {};
@@ -413,17 +424,20 @@ HTML_TEMPLATE = """
                     metrics.forEach((row, i) => {
                         let c_cpu = parseFloat(row.cpu_percent) || 0;
                         let c_mem = parseFloat(row.mem_percent) || 0;
-                        let c_power = parseFloat(row.power_watt) || 0;
-                        let c_carbon = parseFloat(row.carbon_co2) || 0;
-                        let c_pred = parseFloat(row.afmv_pred) || 0;
+                        let c_energy = parseFloat(row.energy_kwh) || 0;
+                        let c_pred = parseFloat(row.ema_pred) || 0;
                         let c_spike = parseFloat(row.spike_ratio) || 0;
+                        let c_overhead_cpu = parseFloat(row.overhead_cpu) || 0;
                         
-                        cpuSum += c_cpu; powerSum += c_power; predSum += c_pred;
-                        if(c_carbon > maxCarbon) maxCarbon = c_carbon;
+                        cpuSum += c_cpu; 
+                        memSum += c_mem; 
+                        predSum += c_pred;
+                        totalEnergy += c_energy;
+                        overheadCpuSum += c_overhead_cpu;
+                        
                         if(c_spike > 0) spikeSum += c_spike;
                         if(row.action === 'GUARDRAIL') guardrailCount++;
                         
-                        // Capture latest state for table
                         latestContainers[row.container_name] = row;
 
                         // Charting
@@ -444,7 +458,6 @@ HTML_TEMPLATE = """
                         datasets[row.container_name].data.push(c_cpu);
                     });
 
-                    // Keep last 30 points
                     if(timeLabels.length > 30) {
                         timeLabels.splice(0, timeLabels.length - 30);
                         Object.keys(datasets).forEach(k => {
@@ -452,11 +465,12 @@ HTML_TEMPLATE = """
                         });
                     }
 
-                    // Update Top Metrics
+                    // Update Top 5 Metrics
                     document.getElementById('cpu-mean').innerText = (cpuSum / metrics.length).toFixed(1) + ' %';
-                    document.getElementById('pred-mean').innerText = (predSum / metrics.length).toFixed(1) + ' %';
-                    document.getElementById('power-mean').innerText = (powerSum / metrics.length).toFixed(1) + ' W';
-                    document.getElementById('carbon-total').innerText = maxCarbon.toFixed(4) + ' kgCO₂';
+                    document.getElementById('mem-mean').innerText = (memSum / metrics.length).toFixed(1) + ' %';
+                    document.getElementById('energy-total').innerText = totalEnergy.toFixed(6) + ' kWh';
+                    document.getElementById('overhead-mean').innerText = (overheadCpuSum / metrics.length).toFixed(2) + ' %';
+                    // Latency is N/A visually in dashboard
 
                     // Update Highlights
                     let avgSpike = spikeSum / metrics.length;
@@ -473,21 +487,21 @@ HTML_TEMPLATE = """
                     const tbody = document.getElementById('container-table-body');
                     tbody.innerHTML = '';
                     Object.values(latestContainers).forEach(c => {
-                        let tierColor = c.tier === 'aggressive' ? 'text-danger' : (c.tier === 'balanced' ? 'text-warning' : 'text-success');
+                        let tierColor = c.tier === 'AGGRESSIVE' ? 'text-danger' : (c.tier === 'BALANCED' ? 'text-warning' : (c.tier === 'SOFT' ? 'text-success' : 'text-muted'));
                         let actionColor = c.action === 'GUARDRAIL' ? 'bg-danger text-white' : 'bg-secondary text-white';
                         if(c.action === 'AGGRESSIVE') actionColor = 'bg-warning text-dark';
                         if(c.action === 'SOFT') actionColor = 'bg-success text-white';
-                        if(c.action === 'INACTIVE') actionColor = 'bg-dark text-muted border border-secondary';
+                        if(c.action === 'INACTIVE' || c.action === 'OBSERVE') actionColor = 'bg-dark text-muted border border-secondary';
 
                         tbody.innerHTML += `
                             <tr>
                                 <td class="fw-bold">${c.container_name}</td>
                                 <td>${c.cpu_percent}%</td>
                                 <td>${c.mem_percent}%</td>
-                                <td class="fw-bold ${tierColor}">${c.tier.toUpperCase()}</td>
-                                <td><span class="badge bg-dark border border-secondary">${parseFloat(c.afmv_pred).toFixed(1)}%</span> (α=${parseFloat(c.alpha||0).toFixed(2)})</td>
+                                <td class="fw-bold ${tierColor}">${(c.tier || 'N/A').toUpperCase()}</td>
+                                <td><span class="badge bg-dark border border-secondary">${parseFloat(c.ema_pred || 0).toFixed(1)}%</span> (α=${parseFloat(c.alpha||0).toFixed(2)})</td>
                                 <td><span class="badge ${actionColor}">${c.action}</span></td>
-                                <td class="text-warning">${c.power_watt} W</td>
+                                <td class="text-warning">${c.power_watt || 0} W</td>
                             </tr>
                         `;
                     });
@@ -545,7 +559,7 @@ def toggle_status():
 def download_csv():
     csv_file = "metrics.csv"
     if os.path.exists(csv_file):
-        return send_file(csv_file, mimetype='text/csv', as_attachment=True, download_name='hgcf_metrics.csv')
+        return send_file(csv_file, mimetype='text/csv', as_attachment=True, download_name='hecf_metrics.csv')
     return "File metrics.csv not found", 404
 
 @app.route("/api/system-info")
@@ -573,3 +587,4 @@ def system_info():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8092, debug=False)
+

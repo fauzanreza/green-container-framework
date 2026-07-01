@@ -1,77 +1,71 @@
 # framework/shaper.py
 # Layer 4: Adaptive Resource Shaping
-# Ref: Xu & Buyya (2019) — container-based resource control; Singh et al. (2021)
-#
-# Menerjemahkan keputusan Layer 3 menjadi perubahan cgroup parameter Docker.
-# Menggunakan docker container.update() yang memodifikasi /sys/fs/cgroup/ secara langsung.
-#
-# PENTING: Memerlukan Docker socket mount dan privilege untuk docker update.
+# Writes directly to cgroupfs v2 (cpu.max). Priority containers are shielded.
 
-import docker
+import os
 import logging
 from .config import CPU_PERIOD, DRY_RUN
 
-logger = logging.getLogger("hgcf.shaper")
+logger = logging.getLogger("hecf.shaper")
+
+
+def get_cgroup_path(container_id: str) -> str:
+    paths = [
+        f"/sys/fs/cgroup/system.slice/docker-{container_id}.scope",
+        f"/sys/fs/cgroup/docker/{container_id}",
+        f"/sys/fs/cgroup/system.slice/docker.service/docker-{container_id}.scope"
+    ]
+    for p in paths:
+        if os.path.exists(p):
+            return p
+    return None
 
 
 def shape_container(
     container_name: str,
+    container_id: str,
+    priority: bool,
     cpu_quota: int,
     cpu_period: int = CPU_PERIOD,
-    mem_limit: str = None,
     dry_run: bool = DRY_RUN,
 ) -> bool:
     """
-    Terapkan limit CPU (dan opsional memori) ke container.
-
-    Args:
-        container_name: nama container Docker
-        cpu_quota: microseconds per period. -1 = hapus limit (unlimited)
-        cpu_period: period dalam microseconds (default 100ms)
-        mem_limit: string misal "512m", "1g", atau None
-        dry_run: jika True, hanya log — tidak benar-benar mengubah resource
-
-    Returns:
-        True jika berhasil (atau dry_run), False jika gagal
+    Apply CPU limits via cgroups v2.
     """
+    # Priority containers are shielded from hard caps (except if unlimited/soft)
+    if priority and cpu_quota > 0:
+        logger.info("[SHIELD] %s is priority container, skipping hard cap.", container_name)
+        return True
+
     if dry_run:
-        if cpu_quota == -1:
-            logger.info("[DRY-RUN] %s: hapus CPU limit", container_name)
+        if cpu_quota <= 0:
+            logger.info("[DRY-RUN] %s: remove CPU limit", container_name)
         else:
             cores = cpu_quota / cpu_period
             logger.info("[DRY-RUN] %s: set CPU=%.2f core (quota=%d)", container_name, cores, cpu_quota)
         return True
 
-    client = docker.from_env()
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        logger.warning("Container '%s' tidak ditemukan, skip shaping", container_name)
+    cgroup_path = get_cgroup_path(container_id)
+    if not cgroup_path:
+        logger.warning("cgroup path not found for %s, skip shaping", container_name)
         return False
 
-    kwargs = {}
-
-    if cpu_quota == -1:
-        # Hapus limit: set cpu_quota=0 untuk Rocky Linux/RHEL Docker
-        # (beberapa versi Docker: -1 tidak valid, 0 = unlimited)
-        kwargs["cpu_quota"] = 0
-        kwargs["cpu_period"] = cpu_period
-    else:
-        kwargs["cpu_quota"] = int(cpu_quota)
-        kwargs["cpu_period"] = int(cpu_period)
-
-    if mem_limit is not None:
-        kwargs["mem_limit"] = mem_limit
-
+    cpu_max_path = os.path.join(cgroup_path, "cpu.max")
+    
     try:
-        container.update(**kwargs)
-        if cpu_quota == -1 or cpu_quota == 0:
+        with open(cpu_max_path, "w") as f:
+            if cpu_quota <= 0:
+                f.write("max")
+            else:
+                f.write(f"{int(cpu_quota)} {int(cpu_period)}")
+                
+        if cpu_quota <= 0:
             logger.info("Shaped %s: CPU limit REMOVED", container_name)
         else:
             cores = cpu_quota / cpu_period
             logger.info("Shaped %s: CPU=%.2f core (quota=%d, period=%d)",
                         container_name, cores, cpu_quota, cpu_period)
         return True
-    except docker.errors.APIError as e:
-        logger.error("Gagal shape container '%s': %s", container_name, str(e))
+    except OSError as e:
+        logger.error("Failed to shape container '%s': %s", container_name, str(e))
         return False

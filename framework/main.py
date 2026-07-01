@@ -1,26 +1,29 @@
 # framework/main.py
-# HGCF Entry Point — Main Control Loop
-# Menyatukan semua layer: Profiler → Monitor → Guardrail → TierDetector → AFMV → Shaper → Energy
+# HECF Entry Point — Main Control Loop
 
 import os
 import time
 import logging
 import csv
+import json
 
 from .profiler      import profile_host, discover_containers
-from .monitor       import get_container_stats, get_adaptive_interval
+from .monitor       import Monitor, get_adaptive_interval
 from .guardrail     import Guardrail
-from .tier_detector import TierDetector, TIER_AGGRESSIVE, TIER_BALANCED, TIER_SOFT
-from .predictor     import AFMVPredictor
+from .tier_detector import TierDetector
+from .predictor     import EMAPredictor
 from .shaper        import shape_container
 from .energy        import estimate_all
+from .overhead_tracker import OverheadTracker
 from .config        import (
-    SAMPLING_INTERVAL_NORMAL,
+    SAMPLING_INTERVAL_LOW,
     CPU_QUOTA_GUARDRAIL,
     CPU_QUOTA_AGGRESSIVE,
     CPU_QUOTA_BALANCED,
     CPU_QUOTA_SOFT,
+    STATIC_CAP_QUOTA,
     DRY_RUN,
+    MODE
 )
 
 # === Logging setup ===
@@ -29,15 +32,15 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-logger = logging.getLogger("hgcf.main")
+logger = logging.getLogger("hecf.main")
 
 
 def main():
     logger.info("=" * 60)
-    logger.info("HGCF v1.0 — Hybrid Green Container Framework")
+    logger.info("HECF v2.0 — Hybrid Energy-Aware Container Framework")
+    logger.info("MODE: %s", MODE)
     if DRY_RUN:
-        logger.info("MODE: DRY RUN (tidak ada perubahan resource aktual)")
-        logger.info("Set DRY_RUN=False di config.py setelah verifikasi log")
+        logger.info("[DRY RUN] No actual resource changes will be applied.")
     logger.info("=" * 60)
 
     # === Layer 1: Environment Profiler ===
@@ -49,24 +52,27 @@ def main():
     with open(csv_path, "a", newline="") as f:
         writer = csv.writer(f)
         if csv_is_new:
-            writer.writerow(["time", "container_name", "cpu_percent", "mem_percent", "tier", "action", "power_watt", "carbon_co2", "afmv_pred", "alpha", "spike_ratio", "p50", "p95"])
+            writer.writerow([
+                "time", "container_name", "cpu_percent", "mem_percent", 
+                "tier", "action", "power_watt", "energy_kwh", 
+                "ema_pred", "alpha", "spike_ratio", "p50", "p95", 
+                "overhead_cpu", "overhead_mem"
+            ])
 
-    # === Inisialisasi komponen Layer 3 ===
-    guardrail    = Guardrail()
+    # === Initialize Components ===
+    monitor = Monitor()
+    guardrail = Guardrail()
     tier_detector = TierDetector()
-    predictor    = AFMVPredictor()
+    predictor = EMAPredictor()
+    overhead_tracker = OverheadTracker()
 
-    # Interval awal sebelum ada data CPU
-    current_interval = SAMPLING_INTERVAL_NORMAL
+    current_interval = SAMPLING_INTERVAL_LOW
+    logger.info("Framework started. Waiting %d seconds for first sample...", current_interval)
 
-    logger.info("Framework started. Menunggu %d detik sebelum sampling pertama...", current_interval)
-
-    # Flag for UI toggle
     status_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "framework_status.json")
-    import json
 
     while True:
-        # Check toggle status
+        # Dashboard toggle
         is_active = True
         if os.path.exists(status_file):
             try:
@@ -78,77 +84,99 @@ def main():
 
         time.sleep(current_interval)
 
-        # === Layer 2: Discover containers (setiap iterasi agar deteksi container baru) ===
-        # Baca dari env var jika ada, otherwise auto-discover
-        env_targets = os.getenv("HGCF_TARGETS", "").strip()
+        # Layer 1/2: Discover containers & tags
+        env_targets = os.getenv("HECF_TARGETS", "").strip()
+        targets_meta = discover_containers()
+        
         if env_targets:
-            target_names = [t.strip() for t in env_targets.split(",") if t.strip()]
-        else:
-            target_names = discover_containers()
+            allowed = [t.strip() for t in env_targets.split(",") if t.strip()]
+            targets_meta = {k: v for k, v in targets_meta.items() if k in allowed}
 
-        if not target_names:
-            logger.warning("Tidak ada target container. Tunggu %ds...", current_interval)
+        if not targets_meta:
+            logger.warning("No target containers discovered. Waiting %ds...", current_interval)
             continue
 
         max_cpu_seen = 0.0
+        overhead = overhead_tracker.get_overhead()
 
-        for name in target_names:
-            # === Layer 2: Monitor ===
-            stats = get_container_stats(name)
-            if stats is None:
-                logger.debug("Container '%s' tidak bisa diread, skip", name)
+        for name, meta in targets_meta.items():
+            cid = meta["id"]
+            priority = meta["priority"]
+
+            # Layer 2: Monitor
+            stats = monitor.get_stats(name, cid)
+            if not stats:
+                logger.debug("Failed to read stats for %s, skipping", name)
                 continue
 
             cpu = stats["cpu_percent"]
             mem = stats["mem_percent"]
             max_cpu_seen = max(max_cpu_seen, cpu)
 
-            # === Layer 3B: Tier Detection (update window) ===
+            # Layer 3B & 3C
             tier_detector.add_sample(name, cpu)
-            tier = tier_detector.get_tier(name)
+            tier_int = tier_detector.get_tier(name)
             tier_stats = tier_detector.get_stats(name)
-
-            # === Layer 3C: AFMV Prediction ===
-            afmv_pred = predictor.update(name, cpu)
+            
+            ema_pred = predictor.update(name, cpu)
             alpha = predictor.get_alpha(name)
 
-            # === Layer 3A: Real-time Guardrail ===
+            # Layer 3A
             guardrail_active = guardrail.update(name, cpu, mem)
 
-            # === Layer 4: Adaptive Resource Shaping ===
-            if not is_active:
-                action = "INACTIVE"
+            # Mode Selection Logic
+            action = "OBSERVE"
+            quota = -1
+            
+            if not is_active or MODE == "default_docker":
+                action = "OBSERVE"
                 quota = CPU_QUOTA_SOFT
-            elif guardrail_active:
-                action = "GUARDRAIL"
-                quota = CPU_QUOTA_GUARDRAIL
-            elif tier == TIER_AGGRESSIVE:
-                action = "AGGRESSIVE"
-                quota = CPU_QUOTA_AGGRESSIVE
-            elif tier == TIER_BALANCED:
-                action = "BALANCED"
-                quota = CPU_QUOTA_BALANCED
-            else:  # TIER_SOFT
-                action = "SOFT"
-                quota = CPU_QUOTA_SOFT
+                tier_str = "N/A"
+            elif MODE == "static_cap":
+                action = "STATIC"
+                quota = STATIC_CAP_QUOTA
+                tier_str = "N/A"
+            elif MODE == "reactive_only":
+                tier_str = "N/A"
+                if guardrail_active:
+                    action = "GUARDRAIL"
+                    quota = CPU_QUOTA_GUARDRAIL
+                else:
+                    action = "SOFT"
+                    quota = CPU_QUOTA_SOFT
+            else:
+                # full_hecf
+                tier_map = {1: "AGGRESSIVE", 2: "BALANCED", 3: "SOFT"}
+                tier_str = tier_map.get(tier_int, "SOFT")
+                
+                if guardrail_active:
+                    action = "GUARDRAIL"
+                    quota = CPU_QUOTA_GUARDRAIL
+                elif tier_int == 1:
+                    action = "AGGRESSIVE"
+                    quota = CPU_QUOTA_AGGRESSIVE
+                elif tier_int == 2:
+                    action = "BALANCED"
+                    quota = CPU_QUOTA_BALANCED
+                else:
+                    action = "SOFT"
+                    quota = CPU_QUOTA_SOFT
 
-            shape_container(name, cpu_quota=quota)
+            # Layer 4: Shaper
+            shape_container(name, cid, priority, quota)
 
-            # === Energy Estimation ===
+            # Energy Estimator
             energy_data = estimate_all(cpu, current_interval)
 
-            # === Logging ===
+            # Logging
             logger.info(
-                "%s | CPU=%.1f%% MEM=%.1f%% | Tier=%s(p50=%.1f p95=%.1f ratio=%.2f) "
-                "| AFMV=%.1f(α=%.3f) | Action=%s | P=%.1fW C=%.4fkgCO2",
-                name, cpu, mem,
-                tier, tier_stats["p50"], tier_stats["p95"], tier_stats["spike_ratio"],
-                afmv_pred, alpha,
-                action,
-                energy_data["power_watt"], energy_data["carbon_kgco2"],
+                "%s (Prio:%s) | CPU=%.1f%% MEM=%.1f%% | Tier=%s | "
+                "EMA=%.1f | Action=%s | P=%.1fW | OH=%.1f%%",
+                name, priority, cpu, mem, tier_str, 
+                ema_pred, action, energy_data["power_watt"], overhead["cpu_percent"]
             )
 
-            # Write to CSV
+            # CSV
             try:
                 with open(csv_path, "a", newline="") as f:
                     writer = csv.writer(f)
@@ -157,23 +185,24 @@ def main():
                         name,
                         f"{cpu:.1f}",
                         f"{mem:.1f}",
-                        tier,
+                        tier_str,
                         action,
                         f"{energy_data['power_watt']:.1f}",
-                        f"{energy_data['carbon_kgco2']:.4f}",
-                        f"{afmv_pred:.1f}",
+                        f"{energy_data['energy_kwh']:.9f}",
+                        f"{ema_pred:.1f}",
                         f"{alpha:.3f}",
                         f"{tier_stats['spike_ratio']:.2f}",
                         f"{tier_stats['p50']:.1f}",
-                        f"{tier_stats['p95']:.1f}"
+                        f"{tier_stats['p95']:.1f}",
+                        f"{overhead['cpu_percent']:.2f}",
+                        f"{overhead['mem_usage_mb']:.2f}"
                     ])
             except Exception as e:
-                logger.error("Gagal menulis ke CSV: %s", e)
+                logger.error("Failed writing to CSV: %s", e)
 
-            if guardrail_active:
-                logger.warning("⚠ GUARDRAIL aktif untuk %s (CPU=%.1f%% MEM=%.1f%%)", name, cpu, mem)
+            if guardrail_active and MODE in ["reactive_only", "full_hecf"]:
+                logger.warning("⚠ GUARDRAIL triggered for %s", name)
 
-        # === Adaptive sampling interval untuk iterasi berikutnya ===
         current_interval = get_adaptive_interval(max_cpu_seen)
 
 

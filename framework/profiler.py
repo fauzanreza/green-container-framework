@@ -1,8 +1,6 @@
 # framework/profiler.py
 # Layer 1: Environment Profiler
-# Ref: Kaiser et al. (2023), Mahmud & Toosi (2021)
-# Membaca kapasitas hardware host dari /proc/cpuinfo dan /proc/meminfo.
-# Juga melakukan auto-discovery container yang aktif (exclude blacklist).
+# Reads host capacity and performs auto-discovery + tagging.
 
 import os
 import socket
@@ -11,22 +9,17 @@ import docker
 
 from .config import EXCLUDED_CONTAINERS
 
-logger = logging.getLogger("hgcf.profiler")
+logger = logging.getLogger("hecf.profiler")
 
 
 def profile_host() -> dict:
-    """
-    Baca kapasitas CPU dan RAM host dari /proc filesystem.
-    Dijalankan sekali saat framework start.
-    """
-    # CPU count dari /proc/cpuinfo
+    """Read CPU and RAM capacity from /proc filesystem."""
     try:
         with open("/proc/cpuinfo") as f:
             cpu_count = sum(1 for line in f if line.strip().startswith("processor"))
     except OSError:
         cpu_count = os.cpu_count() or 1
 
-    # RAM dari /proc/meminfo
     mem_total_kb = 0
     try:
         with open("/proc/meminfo") as f:
@@ -52,33 +45,38 @@ def profile_host() -> dict:
     return profile
 
 
-def discover_containers() -> list:
+def discover_containers() -> dict:
     """
-    Auto-discover semua container yang sedang running,
-    kecuali yang ada di EXCLUDED_CONTAINERS.
-    Juga exclude diri sendiri (container HGCF itu sendiri).
+    Auto-discover all running containers, filter excluded ones.
+    Returns: dict mapping container_name to metadata:
+      {
+         "name1": {"id": "long_id", "priority": False},
+         ...
+      }
     """
-    # Hostname container HGCF = container ID (Docker default)
     self_hostname = socket.gethostname()
 
     try:
         client = docker.from_env()
         running = client.containers.list()
     except Exception as e:
-        logger.error("Gagal koneksi Docker daemon: %s", str(e))
-        return []
+        logger.error("Failed to connect to Docker daemon: %s", str(e))
+        return {}
 
-    targets = []
+    targets = {}
     for c in running:
         name = c.name
-        # Skip diri sendiri
         if self_hostname in c.id:
             continue
-        # Skip blacklist
         if name in EXCLUDED_CONTAINERS:
-            logger.debug("Skip excluded container: %s", name)
+            logger.debug("Skipping excluded container: %s", name)
             continue
-        targets.append(name)
+            
+        priority = c.labels.get("hecf.priority") == "high"
+        targets[name] = {
+            "id": c.id,
+            "priority": priority
+        }
 
-    logger.info("Discovered %d target container(s): %s", len(targets), targets)
+    logger.info("Discovered %d target container(s)", len(targets))
     return targets

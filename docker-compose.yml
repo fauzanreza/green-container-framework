@@ -1,8 +1,8 @@
 version: "3.8"
 services:
-  hgcf:
+  hecf:
     build: .
-    container_name: hgcf
+    container_name: hecf
     privileged: true
     pid: host
     volumes:
@@ -13,12 +13,15 @@ services:
       - ./metrics.csv:/app/metrics.csv
       - ./framework_status.json:/app/framework_status.json
     environment:
-      - HGCF_TARGETS=""
+      - HECF_TARGETS=""
+      - HECF_MODE=full_hecf
     restart: unless-stopped
+    networks:
+      - hecf-network
 
-  hgcf-dashboard:
+  hecf-dashboard:
     build: .
-    container_name: hgcf-dashboard
+    container_name: hecf-dashboard
     command: ["python", "dashboard.py"]
     ports:
       - "8092:8092"
@@ -27,10 +30,21 @@ services:
       - ./framework_status.json:/app/framework_status.json
       - /proc/cpuinfo:/proc/cpuinfo:ro
       - /proc/meminfo:/proc/meminfo:ro
+    restart: unless-stopped
+    networks:
+      - hecf-network
 
   bench-json:
     build: ./http-arena
     container_name: bench-json
     ports:
       - "8000:8000"
+    labels:
+      - "hecf.priority=low"
     restart: unless-stopped
+    networks:
+      - hecf-network
+
+networks:
+  hecf-network:
+    driver: bridge

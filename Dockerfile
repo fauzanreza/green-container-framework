@@ -9,7 +9,7 @@ COPY framework/ ./framework/
 COPY dashboard.py .
 
 # Default: auto-discover containers
-# Override dengan: -e HGCF_TARGETS="portfolio-web,app-signature"
-ENV HGCF_TARGETS=""
+# Override with: -e HECF_TARGETS="bench-json,other-app"
+ENV HECF_TARGETS=""
 
 CMD ["python", "-m", "framework.main"]
