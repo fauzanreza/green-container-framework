@@ -2,31 +2,7 @@
 ## Hybrid Energy-Aware Container Framework (HECF)
 
 > **Status:** Aligned to `PROPOSAL_THESIS_203012510019_V2` (final thesis proposal).
-> **Supersedes:** All earlier "Hybrid Green Container Framework (HGCF)" PRDs.
-> Companion document: `architecture.md` (technical design). Use both together as the
-> refactoring spec.
-
----
-
-### 0. Migration Notes (read first)
-
-See `architecture.md` §0 for the full technical delta table. In PRD terms, the scope
-reduction across revisions means:
-
-1. **Drop** all carbon/CO2e/environmental-impact features and copy. This was a
-   requirement in the old scope; the final proposal's Batasan Penelitian (§1.6)
-   explicitly excludes it: *"Tidak dilakukan estimasi emisi karbon atau analisis
-   dampak lingkungan."*
-2. **Shrink** the dashboard from "17 evaluation metrics" down to exactly 5 (4 core +
-   1 meta-metric). This is intentional, not a simplification bug — proposal §3.5
-   frames the narrower metric set as avoiding "monitoring paradox" (citing Dinga et
-   al., where heavy monitoring itself wastes the resources it's supposed to save).
-3. **Rename** the product from HGCF to HECF everywhere (config keys, container
-   names, network names, docs, log strings).
-4. **Add** capabilities that did not exist in the old PRD: container priority
-   tagging, framework self-overhead tracking, and a baseline/mode switch needed to
-   reproduce the thesis's comparative experiments.
-5. **Tighten** the predictor spec: fixed EMA alpha (0.2), not adaptive.
+> Companion document: `architecture.md` (technical design).
 
 ---
 

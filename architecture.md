@@ -2,34 +2,7 @@
 ## Hybrid Energy-Aware Container Framework (HECF)
 
 > **Status:** Aligned to `PROPOSAL_THESIS_203012510019_V2` (final thesis proposal).
-> **Supersedes:** All earlier "Hybrid Green Container Framework (HGCF)" documents.
-> This file is written as a machine-readable reference — an AI coding agent can use
-> Section 0 as a diff spec and Sections 1–9 as the target-state architecture.
-
----
-
-### 0. Migration Notes — HGCF → HECF (read this first if refactoring existing code)
-
-The thesis proposal was scoped down across multiple committee revisions. The codebase
-was originally built against the old "Green Computing" framing and must be refactored
-to match the final version. Concrete deltas:
-
-| # | Area | OLD (HGCF, remove/change) | NEW (HECF, final proposal) |
-|---|------|---------------------------|------------------------------|
-| 1 | Project/framework name | `HGCF` — Hybrid **Green** Container Framework | `HECF` — Hybrid **Energy-Aware** Container Framework |
-| 2 | Carbon tracking | `framework/energy.py` converts Joules → kg CO₂e using Indonesia grid intensity (0.78 kg CO₂e/kWh) | **Delete entirely.** Proposal §1.6 (Batasan Penelitian) explicitly excludes carbon/environmental-impact estimation. Energy stays in Joule/kWh only. |
-| 3 | Power model constants | `P_idle = 15W`, `P_max = 65W` (Intel i3-4130 specific) | `P_idle ≈ 15W`, `P_max ≈ 54W` (generic "entry-level server class", proposal §3.5.1). Keep configurable, but this is the default. |
-| 4 | Dashboard metric count | "17 evaluation metrics" | Exactly **5**: CPU Utilization, Memory/RAM Usage, Energy Consumption, Web Latency (SLA), Framework Overhead |
-| 5 | Predictor (Layer 3C) algorithm | AFMV with **adaptive alpha** (alpha increases during spiky intervals, based on stdev) | Fixed-alpha **EMA**, `alpha = 0.2`, chosen empirically. O(1) memory (needs only t-1). Output is **not** applied directly to shaping — it fine-tunes the Guardrail threshold (proactive early-warning), not a direct actuator input. |
-| 6 | Guardrail (Layer 3A) rule | Generic "tiny volatile queue of last 5 intervals" | Precise rule: **3-of-5 boolean evaluation array**; triggers if `CPU > 80%` **or** `RAM > 90%` in ≥3 of the last 5 samples |
-| 7 | Layer 1 scope | Hardware profiling only | Adds **container tagging**: classify each container as `priority` (e.g. databases / Async DB — never hard-throttled, to avoid data corruption) vs `non-priority` (e.g. stateless web front-ends / static files — safe to throttle first) |
-| 8 | cgroups version | Unspecified (`/sys/fs/cgroup` generic) | Explicitly **cgroups v2** (unified hierarchy), requires kernel ≥ 5.10 |
-| 9 | OS target | Rocky Linux 9 (implied by deployment host) | Proposal experimental environment specifies Ubuntu Server LTS; kept **OS-agnostic** in requirements (`Linux, kernel ≥5.10, cgroups v2`) — compatible with both Ubuntu (thesis experiments) and Rocky Linux 9 (home-server production deployment) |
-| 10 | ML/ML-adjacent methods | Implied openness to heavier heuristics | Hard constraint (proposal §1.6, §3): **only** AFMV/EMA + rolling-window linear stats. No ARIMA, ETS, PROPHET, or any ML/DL library |
-| 11 | Evaluation baselines | Not modeled in code | Framework must be runnable in **4 modes** for experiment reproducibility: `default_docker` (no-op), `static_cap` (fixed 80% CPU hard cap), `reactive_only` (Guardrail active, Tier Detection + Predictor disabled), `full_hecf` (all layers active) |
-| 12 | Framework Overhead | Not explicitly tracked | New required capability: HECF must measure **its own** CPU/RAM footprint (Metric 5) — this is a formal hypothesis-validation metric (H2), not an optional nicety |
-| 13 | Experiment/analysis tooling | Not part of repo scope | New `experiments/` and `analysis/` modules required to reproduce the 72-run design (§3.4.3) and statistical tests (§3.6) |
-| 14 | Repository/branding strings | "HGCF", "Green Computing", any carbon/CO2e references in code comments, config keys, env vars, container/network names | Rename to `HECF` / "Energy-Aware" throughout; strip all carbon/green-computing language from identifiers, docs, and log messages |
+> Companion document: `prd.md` (functional requirements).
 
 ---
 
