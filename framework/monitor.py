@@ -15,7 +15,20 @@ class Monitor:
     def __init__(self):
         # container_name -> {"time": float, "usage_usec": int}
         self._prev_stats = {}
-        
+        self._host_mem_bytes = self._read_host_mem()
+
+    def _read_host_mem(self) -> int:
+        """Read total host RAM in bytes from /proc/meminfo."""
+        try:
+            with open("/proc/meminfo") as f:
+                for line in f:
+                    if line.startswith("MemTotal:"):
+                        kb = int(line.split()[1])
+                        return kb * 1024
+        except OSError:
+            pass
+        return 4 * 1024 * 1024 * 1024  # fallback: 4 GB
+
     def _get_cgroup_path(self, container_id: str) -> str:
         paths = [
             f"/sys/fs/cgroup/system.slice/docker-{container_id}.scope",
@@ -57,30 +70,22 @@ class Monitor:
         try:
             with open(os.path.join(cgroup_path, "memory.max")) as f:
                 val = f.read().strip()
-                if val == "max":
-                    mem_limit = 1
-                else:
-                    mem_limit = int(val)
+                # "max" means no container limit → use host total RAM
+                mem_limit = self._host_mem_bytes if val == "max" else int(val)
         except OSError:
-            mem_limit = 1
+            mem_limit = self._host_mem_bytes
             
         prev = self._prev_stats.get(container_name)
         self._prev_stats[container_name] = {"time": now, "usage_usec": usage_usec}
         
         if prev:
             time_delta = now - prev["time"]
-            usage_delta = (usage_usec - prev["usage_usec"]) / 1_000_000.0 # convert to seconds
-            if time_delta > 0:
-                cpu_percent = (usage_delta / time_delta) * 100.0
-            else:
-                cpu_percent = 0.0
+            usage_delta = (usage_usec - prev["usage_usec"]) / 1_000_000.0
+            cpu_percent = (usage_delta / time_delta) * 100.0 if time_delta > 0 else 0.0
         else:
             cpu_percent = 0.0
             
-        if mem_limit > 1:
-            mem_percent = (mem_usage / mem_limit) * 100.0
-        else:
-            mem_percent = 0.0 # Avoid division by max/1
+        mem_percent = (mem_usage / mem_limit) * 100.0 if mem_limit > 0 else 0.0
             
         return {
             "name": container_name,
