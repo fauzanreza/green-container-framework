@@ -524,18 +524,23 @@ def index():
 
 @app.route("/api/metrics")
 def api_metrics():
-    csv_file = "metrics.csv"
-    if not os.path.exists(csv_file):
+    csv_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "metrics.csv")
+    if not os.path.exists(csv_file) or not os.path.isfile(csv_file):
+        return jsonify({"status": "empty", "data": []})
+    if os.path.getsize(csv_file) == 0:
         return jsonify({"status": "empty", "data": []})
     
     data = []
     fieldnames = ["time", "container_name", "cpu_percent", "mem_percent", "tier", "action", "power_watt", "energy_kwh", "ema_pred", "alpha", "spike_ratio", "p50", "p95", "overhead_cpu", "overhead_mem"]
-    with open(csv_file, newline="") as f:
-        reader = csv.DictReader(f, fieldnames=fieldnames)
-        for i, row in enumerate(reader):
-            if i == 0 and row["time"] == "time":
-                continue
-            data.append(row)
+    try:
+        with open(csv_file, newline="") as f:
+            reader = csv.DictReader(f, fieldnames=fieldnames)
+            for i, row in enumerate(reader):
+                if i == 0 and row["time"] == "time":
+                    continue
+                data.append(row)
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e), "data": []})
     
     return jsonify({"status": "success", "data": data[-150:]})
 
@@ -560,10 +565,10 @@ def toggle_status():
 
 @app.route("/api/download-csv")
 def download_csv():
-    csv_file = "metrics.csv"
-    if os.path.exists(csv_file):
+    csv_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "metrics.csv")
+    if os.path.exists(csv_file) and os.path.isfile(csv_file):
         return send_file(csv_file, mimetype='text/csv', as_attachment=True, download_name='hecf_metrics.csv')
-    return "File metrics.csv not found", 404
+    return "metrics.csv not ready yet — wait for first HECF cycle (30s)", 404
 
 @app.route("/api/system-info")
 def system_info():
