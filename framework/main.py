@@ -85,7 +85,7 @@ def main():
         time.sleep(current_interval)
 
         # Layer 1/2: Discover containers & tags
-        env_targets = os.getenv("HECF_TARGETS", "").strip()
+        env_targets = os.getenv("HECF_TARGETS", "").strip().strip('"').strip("'")
         targets_meta = discover_containers()
         
         if env_targets:
