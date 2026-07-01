@@ -5,7 +5,10 @@
 
 import os
 import time
+import logging
 from .config import SAMPLING_CPU_THRESHOLD, SAMPLING_INTERVAL_LOW, SAMPLING_INTERVAL_HIGH
+
+logger = logging.getLogger("hecf.monitor")
 
 
 class Monitor:
@@ -27,6 +30,7 @@ class Monitor:
     def get_stats(self, container_name: str, container_id: str) -> dict:
         cgroup_path = self._get_cgroup_path(container_id)
         if not cgroup_path:
+            logger.error("cgroup path not found for %s (%s)", container_name, container_id)
             return None
             
         now = time.time()
@@ -39,7 +43,8 @@ class Monitor:
                     if line.startswith("usage_usec"):
                         usage_usec = int(line.split()[1])
                         break
-        except OSError:
+        except OSError as e:
+            logger.error("Failed reading cpu.stat for %s: %s", container_name, e)
             return None
             
         # === Read Memory ===
