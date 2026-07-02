@@ -287,41 +287,111 @@ HTML_TEMPLATE = """
         .legend-item:hover { background: #e2e8f0; }
         .legend-color { width: 10px; height: 10px; border-radius: 2px; }
 
-        /* ---- HTOP STYLES ---- */
-        .htop-panel {
-            background: #0f172a;
-            color: #e2e8f0;
-            font-family: 'Courier New', Courier, monospace;
-            font-size: 13px;
-            border-radius: 12px;
-            padding: 16px;
-            margin-bottom: 24px;
-            box-shadow: inset 0 2px 4px rgba(0,0,0,0.5);
-            display: flex;
-            flex-direction: column;
+        /* ---- HOST RESOURCE CARDS ---- */
+        .host-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
             gap: 16px;
+            margin-bottom: 24px;
         }
-        @media (min-width: 768px) {
-            .htop-panel { flex-direction: row; gap: 24px; }
+        .host-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: var(--shadow);
         }
-        .htop-col { flex: 1; display: flex; flex-direction: column; gap: 4px; }
-        .htop-row {
+        .host-card .hc-title {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            color: var(--text-muted);
+            margin-bottom: 14px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .host-card .hc-tag {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 2px 7px;
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: none;
+            letter-spacing: 0;
+        }
+        .cpu-core-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+            gap: 8px;
+        }
+        .core-row {
             display: flex;
             align-items: center;
-            white-space: pre;
+            gap: 8px;
         }
-        .htop-label { color: #38bdf8; width: 50px; flex-shrink: 0; }
-        .htop-bar-bg {
-            flex-grow: 1;
-            background: #1e293b;
-            height: 14px;
-            margin: 0 8px;
-            position: relative;
+        .core-label {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-muted);
+            min-width: 46px;
         }
-        .htop-bar-fill { height: 100%; background: #22c55e; transition: width 1s; }
-        .htop-bar-text { position: absolute; top: -1px; right: 4px; font-size: 11px; color: #f8fafc; text-shadow: 1px 1px 1px #000; }
-        .htop-sys-label { color: #38bdf8; }
-        .htop-sys-val { color: #f8fafc; font-weight: bold; }
+        .core-bar {
+            flex: 1;
+            height: 8px;
+            background: var(--bg);
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        .core-bar-fill {
+            height: 100%;
+            border-radius: 6px;
+            transition: width 0.8s ease;
+            background: linear-gradient(90deg, #22c55e, #16a34a);
+        }
+        .core-bar-fill.hot { background: linear-gradient(90deg, #f59e0b, #ef4444); }
+        .core-pct {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text);
+            min-width: 42px;
+            text-align: right;
+        }
+        .mem-block { margin-bottom: 14px; }
+        .mem-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 6px;
+        }
+        .mem-label { font-size: 12px; font-weight: 500; color: var(--text-muted); }
+        .mem-val { font-size: 13px; font-weight: 700; color: var(--text); }
+        .mem-bar {
+            height: 10px;
+            background: var(--bg);
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        .mem-bar-fill {
+            height: 100%;
+            border-radius: 6px;
+            transition: width 0.8s ease;
+        }
+        .mem-bar-fill.ram { background: linear-gradient(90deg, #7c3aed, #a78bfa); }
+        .mem-bar-fill.swap { background: linear-gradient(90deg, #d97706, #fbbf24); }
+        .sys-stat-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid var(--bg);
+        }
+        .sys-stat-row:last-child { border-bottom: none; }
+        .sys-label { font-size: 12px; color: var(--text-muted); }
+        .sys-val { font-size: 13px; font-weight: 700; color: var(--text); }
     </style>
 
 </head>
@@ -380,30 +450,44 @@ HTML_TEMPLATE = """
 
     </div>
 
-    <!-- HTOP Panel -->
-    <div class="htop-panel" id="htop-panel">
-        <div class="htop-col" id="htop-cpus">
-            <div class="text-muted" style="font-size: 11px;">Loading htop data...</div>
+    <!-- Host Resource Overview -->
+    <div class="host-grid">
+        <div class="host-card">
+            <div class="hc-title">CPU Cores <span class="hc-tag" id="hc-cpu-tag">0 cores</span></div>
+            <div class="cpu-core-grid" id="htop-cpus">
+                <div class="text-muted" style="font-size:12px;">Loading…</div>
+            </div>
         </div>
-        <div class="htop-col">
-            <div class="htop-row">
-                <span class="htop-label">Mem[</span>
-                <div class="htop-bar-bg"><div class="htop-bar-fill" id="htop-mem-bar" style="width:0%;"></div><span class="htop-bar-text" id="htop-mem-text">0G/0G</span></div>
-                <span style="color:#38bdf8;">]</span>
+        <div class="host-card">
+            <div class="hc-title">Memory &amp; Swap <span class="hc-tag">/proc/meminfo</span></div>
+            <div class="mem-block">
+                <div class="mem-header">
+                    <span class="mem-label">RAM</span>
+                    <span class="mem-val" id="htop-mem-text">0 / 0 GB</span>
+                </div>
+                <div class="mem-bar"><div class="mem-bar-fill ram" id="htop-mem-bar" style="width:0%"></div></div>
             </div>
-            <div class="htop-row">
-                <span class="htop-label">Swp[</span>
-                <div class="htop-bar-bg"><div class="htop-bar-fill" id="htop-swp-bar" style="width:0%; background:#ef4444;"></div><span class="htop-bar-text" id="htop-swp-text">0G/0G</span></div>
-                <span style="color:#38bdf8;">]</span>
+            <div class="mem-block">
+                <div class="mem-header">
+                    <span class="mem-label">Swap</span>
+                    <span class="mem-val" id="htop-swp-text">0 / 0 GB</span>
+                </div>
+                <div class="mem-bar"><div class="mem-bar-fill swap" id="htop-swp-bar" style="width:0%"></div></div>
             </div>
-            <div class="htop-row mt-3">
-                <span class="htop-sys-label">Tasks: </span><span class="htop-sys-val" id="htop-tasks">0</span><span class="htop-sys-label"> total</span>
+        </div>
+        <div class="host-card">
+            <div class="hc-title">System <span class="hc-tag">/proc</span></div>
+            <div class="sys-stat-row">
+                <span class="sys-label">Tasks</span>
+                <span class="sys-val" id="htop-tasks">0</span>
             </div>
-            <div class="htop-row">
-                <span class="htop-sys-label">Load average: </span><span class="htop-sys-val" id="htop-load">0.00 0.00 0.00</span>
+            <div class="sys-stat-row">
+                <span class="sys-label">Load Avg (1 / 5 / 15 min)</span>
+                <span class="sys-val" id="htop-load">0.00 / 0.00 / 0.00</span>
             </div>
-            <div class="htop-row">
-                <span class="htop-sys-label">Uptime: </span><span class="htop-sys-val" id="htop-uptime">0 days, 00:00:00</span>
+            <div class="sys-stat-row">
+                <span class="sys-label">Uptime</span>
+                <span class="sys-val" id="htop-uptime">0 days, 00:00:00</span>
             </div>
         </div>
     </div>
@@ -591,23 +675,25 @@ async function fetchHtop() {
         
         let cpuHtml = '';
         data.cpus.forEach((cpu, i) => {
-            cpuHtml += `<div class="htop-row">
-                <span class="htop-label">${i}[</span>
-                <div class="htop-bar-bg"><div class="htop-bar-fill" style="width:${cpu}%;"></div><span class="htop-bar-text">${cpu.toFixed(1)}%</span></div>
-                <span style="color:#38bdf8;">]</span>
+            const hot = cpu > 60 ? ' hot' : '';
+            cpuHtml += `<div class="core-row">
+                <span class="core-label">Core ${i}</span>
+                <div class="core-bar"><div class="core-bar-fill${hot}" style="width:${cpu}%"></div></div>
+                <span class="core-pct">${cpu.toFixed(1)}%</span>
             </div>`;
         });
         document.getElementById('htop-cpus').innerHTML = cpuHtml;
+        document.getElementById('hc-cpu-tag').innerText = data.cpus.length + ' cores';
         
         const m = data.memory;
         document.getElementById('htop-mem-bar').style.width = m.mem_percent + '%';
-        document.getElementById('htop-mem-text').innerText = `${m.mem_used_gb}G/${m.mem_total_gb}G`;
+        document.getElementById('htop-mem-text').innerText = `${m.mem_used_gb} / ${m.mem_total_gb} GB`;
         document.getElementById('htop-swp-bar').style.width = m.swap_percent + '%';
-        document.getElementById('htop-swp-text').innerText = `${m.swap_used_gb}G/${m.swap_total_gb}G`;
+        document.getElementById('htop-swp-text').innerText = `${m.swap_used_gb} / ${m.swap_total_gb} GB`;
         
         const s = data.system;
-        document.getElementById('htop-tasks').innerText = s.tasks;
-        document.getElementById('htop-load').innerText = s.load.map(x=>x.toFixed(2)).join(' ');
+        document.getElementById('htop-tasks').innerText = s.tasks + ' total';
+        document.getElementById('htop-load').innerText = s.load.map(x=>x.toFixed(2)).join(' / ');
         document.getElementById('htop-uptime').innerText = s.uptime;
     } catch(e) {}
 }
