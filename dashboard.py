@@ -256,6 +256,7 @@ HTML_TEMPLATE = """
         .act-agg { background: #fef9c3; color: #92400e; }
         .act-bal { background: #dbeafe; color: #1d4ed8; }
         .act-soft { background: #dcfce7; color: #15803d; }
+        .act-micro { background: #e0f2fe; color: #0369a1; }
         .act-other { background: #f1f5f9; color: #64748b; }
         /* ---- CHART ---- */
         #resourceChart { max-height: 300px; }
@@ -530,6 +531,18 @@ HTML_TEMPLATE = """
                         </div>
                         <p style="font-size:11px;color:var(--text-muted);">Emergency caps applied (Layer 3A)</p>
                     </div>
+
+                    <!-- MICRO-FREEZE INSIGHTS -->
+                    <hr style="border-color: var(--border); margin: 12px 0;">
+                    <div>
+                        <div class="insight-row">
+                            <span class="insight-label">Micro-Freezes (Idle 0% CPU)</span>
+                            <span class="insight-val" style="color: #0ea5e9;" id="freeze-count">0</span>
+                        </div>
+                        <p style="font-size:11px;color:var(--text-muted);">Containers frozen at 0% CPU during idle (Layer 4)</p>
+                    </div>
+                    <!-- END MICRO-FREEZE INSIGHTS -->
+
                     <div class="status-box mt-auto">
                         <div class="icon">🚀</div>
                         <div>
@@ -764,13 +777,21 @@ async function fetchMetrics() {
 
         const tbody = document.getElementById('container-table-body');
         const containers = Object.values(latest);
+
+        let activeFreezes = 0;
+        containers.forEach(c => {
+            const act = (c.action||'').toUpperCase();
+            if (act === 'MICRO_FREEZE') activeFreezes++;
+        });
+        document.getElementById('freeze-count').innerText = activeFreezes;
+
         document.getElementById('container-count').innerText = containers.length + ' containers';
         tbody.innerHTML = '';
         containers.forEach(c => {
             const tier = (c.tier||'N/A').toUpperCase();
             const action = (c.action||'').toUpperCase();
             const tierClass = tier==='AGGRESSIVE'?'tier-agg':tier==='BALANCED'?'tier-bal':tier==='SOFT'?'tier-soft':'tier-na';
-            const actClass = action==='GUARDRAIL'?'act-guardrail':action==='AGGRESSIVE'?'act-agg':action==='BALANCED'?'act-bal':action==='SOFT'?'act-soft':'act-other';
+            const actClass = action==='GUARDRAIL'?'act-guardrail':action==='AGGRESSIVE'?'act-agg':action==='BALANCED'?'act-bal':action==='SOFT'?'act-soft':action==='MICRO_FREEZE'?'act-micro':'act-other';
             const cpu = parseFloat(c.cpu_percent||0).toFixed(1);
             const mem = parseFloat(c.mem_percent||0).toFixed(1);
             const ema = parseFloat(c.ema_pred||0).toFixed(1);

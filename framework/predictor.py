@@ -35,3 +35,9 @@ class EMAPredictor:
     def get_alpha(self, container_name: str) -> float:
         """Return alpha (fixed for EMA)."""
         return EMA_ALPHA
+
+    def cleanup(self, active_containers: set):
+        """Remove tracking state for containers that no longer exist."""
+        dead = [name for name in self._predictions if name not in active_containers]
+        for name in dead:
+            del self._predictions[name]

@@ -71,3 +71,9 @@ class TierDetector:
             "spike_ratio": round(ratio, 3),
             "samples":     len(window),
         }
+
+    def cleanup(self, active_containers: set):
+        """Remove tracking state for containers that no longer exist."""
+        dead = [name for name in self._windows if name not in active_containers]
+        for name in dead:
+            del self._windows[name]
