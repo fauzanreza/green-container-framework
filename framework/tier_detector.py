@@ -13,12 +13,15 @@ from .config import (
     COLD_START_SAMPLES,
     TIER1_AGGRESSIVE_RATIO,
     TIER2_BALANCED_RATIO,
+    TIER_HYSTERESIS_SAMPLES,
 )
 
 class TierDetector:
     def __init__(self):
         # container_name -> list of cpu_percent values (sliding window)
         self._windows: dict = defaultdict(list)
+        # Hysteresis state: container_name -> {"current": int, "pending": int, "count": int}
+        self._hysteresis: dict = {}
 
     def add_sample(self, container_name: str, cpu: float):
         """Tambahkan sampel CPU ke sliding window container."""
@@ -51,11 +54,40 @@ class TierDetector:
         spike_ratio = p95 / p50
 
         if spike_ratio > TIER1_AGGRESSIVE_RATIO:
-            return 1
+            raw_tier = 1
         elif spike_ratio >= TIER2_BALANCED_RATIO:
-            return 2
+            raw_tier = 2
         else:
-            return 3
+            raw_tier = 3
+
+        # === Hysteresis (Gap #4) ===
+        # Tier change commits only after TIER_HYSTERESIS_SAMPLES consecutive
+        # evaluations at the new tier, preventing rapid oscillation noise.
+        if container_name not in self._hysteresis:
+            self._hysteresis[container_name] = {
+                "current": raw_tier, "pending": raw_tier, "count": TIER_HYSTERESIS_SAMPLES
+            }
+            return raw_tier
+
+        state = self._hysteresis[container_name]
+        if raw_tier == state["current"]:
+            # Still at current tier — reset any pending transition
+            state["pending"] = raw_tier
+            state["count"] = 0
+            return state["current"]
+        elif raw_tier == state["pending"]:
+            # Same pending tier — increment counter
+            state["count"] += 1
+            if state["count"] >= TIER_HYSTERESIS_SAMPLES:
+                state["current"] = raw_tier
+                state["count"] = 0
+                return raw_tier
+            return state["current"]  # Hold previous tier
+        else:
+            # New different pending tier — start fresh count
+            state["pending"] = raw_tier
+            state["count"] = 1
+            return state["current"]  # Hold previous tier
 
     def get_stats(self, container_name: str) -> dict:
         """Return statistik window untuk logging/reporting."""
@@ -77,3 +109,4 @@ class TierDetector:
         dead = [name for name in self._windows if name not in active_containers]
         for name in dead:
             del self._windows[name]
+            self._hysteresis.pop(name, None)

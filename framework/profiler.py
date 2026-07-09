@@ -7,7 +7,7 @@ import socket
 import logging
 import docker
 
-from .config import EXCLUDED_CONTAINERS
+from .config import EXCLUDED_CONTAINERS, NETWORK_INFRA_PATTERNS, CONNTRACK_MIN
 
 logger = logging.getLogger("hecf.profiler")
 
@@ -56,6 +56,35 @@ def profile_host() -> dict:
         profile["hostname"], profile["cpu_count"], profile["mem_total_mb"],
         profile["p_idle_watts"], profile["p_max_watts"], hw_sensor.available
     )
+
+    # === Host /proc Mount Verification (Gap #7) ===
+    os_cpu = os.cpu_count() or 1
+    if cpu_count != os_cpu:
+        logger.critical(
+            "⚠ /proc MISMATCH: /proc/cpuinfo shows %d cores but os.cpu_count()=%d. "
+            "Likely reading container's own /proc instead of host's. "
+            "Ensure 'pid: host' is set in docker-compose.yml.",
+            cpu_count, os_cpu
+        )
+    else:
+        logger.info("Host /proc verification PASSED (cpu_count=%d matches os.cpu_count)", cpu_count)
+
+    # === nf_conntrack_max Pre-flight (Gap #17) ===
+    try:
+        with open("/proc/sys/net/netfilter/nf_conntrack_max") as f:
+            conntrack_max = int(f.read().strip())
+        if conntrack_max < CONNTRACK_MIN:
+            logger.warning(
+                "⚠ nf_conntrack_max=%d < recommended %d — new connections may be "
+                "silently dropped during traffic spikes. "
+                "Fix: sysctl -w net.netfilter.nf_conntrack_max=%d",
+                conntrack_max, CONNTRACK_MIN, CONNTRACK_MIN
+            )
+        else:
+            logger.info("nf_conntrack_max check PASSED (%d >= %d)", conntrack_max, CONNTRACK_MIN)
+    except OSError:
+        logger.debug("nf_conntrack_max not readable — skipping pre-flight check")
+
     return profile
 
 
@@ -87,6 +116,23 @@ def discover_containers() -> dict:
             continue
             
         priority = c.labels.get("hecf.priority") == "high"
+
+        # === Network-Infra Auto-Priority (Gap #15) ===
+        if not priority:
+            image_name = ""
+            try:
+                image_name = (c.image.tags[0] if c.image.tags else "").lower()
+            except Exception:
+                pass
+            for pattern in NETWORK_INFRA_PATTERNS:
+                if pattern in name.lower() or pattern in image_name:
+                    priority = True
+                    logger.info(
+                        "[AUTO-PRIORITY] %s matched pattern '%s' — forced priority=True",
+                        name, pattern
+                    )
+                    break
+
         targets[name] = {
             "id": c.id,
             "priority": priority

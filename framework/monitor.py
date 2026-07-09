@@ -64,12 +64,25 @@ class Monitor:
             logger.error("Failed reading cpu.stat for %s: %s", container_name, e)
             return None
 
-        # === Read Memory ===
+        # === Read Memory (memory.stat — excludes reclaimable cache) ===
         try:
             with open(os.path.join(cgroup_path, "memory.current")) as f:
-                mem_usage = int(f.read().strip())
+                mem_current = int(f.read().strip())
         except OSError:
-            mem_usage = 0
+            mem_current = 0
+
+        # Parse inactive_file from memory.stat to exclude reclaimable cache
+        inactive_file = 0
+        try:
+            with open(os.path.join(cgroup_path, "memory.stat")) as f:
+                for line in f:
+                    if line.startswith("inactive_file"):
+                        inactive_file = int(line.split()[1])
+                        break
+        except OSError:
+            pass
+
+        mem_usage = max(0, mem_current - inactive_file)
 
         try:
             with open(os.path.join(cgroup_path, "memory.max")) as f:

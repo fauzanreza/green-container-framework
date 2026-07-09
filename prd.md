@@ -75,14 +75,27 @@ Full technical spec: `architecture.md` §3.
   - Auto-detects host CPU/RAM capacity at init via `/proc/cpuinfo`, `/proc/meminfo`.
   - Attempts to detect hardware power sensors (Intel RAPL / AMD energy counters) for
     real-time electrical measurement (see §4.2).
-  - Cold-Start Fallback: forces **Tier 2 (Balanced)** until 120 samples collected.
+  - Cold-Start Fallback: forces **Tier 2 (Balanced)** until 30 samples collected
+    (revised from 120 — at 30s polling, 120 samples = 60 min > 30-min run duration).
   - Container tagging: classifies containers as `priority` (never hard-capped) or
     `non-priority` (safe to throttle first) via Docker labels.
+  - **Host `/proc` Mount Verification:** validates at cold start that `/proc` is the
+    host's (not the container's own) by cross-checking CPU count. Requires `pid: host`.
+  - **Network-Infra Auto-Priority:** containers matching known proxy/DNS image patterns
+    (`nginx`, `caddy`, `traefik`, `cloudflared`, `coredns`) are force-tagged
+    `priority=True` to prevent freezing/throttling network infrastructure.
+  - **`nf_conntrack_max` Pre-flight:** warns if below 65536 — saturated conntrack
+    drops connections regardless of cgroup settings.
 
 - **Layer 2: Monitoring Engine**
   - Reads CPU/Memory metrics **directly from cgroups v2 (cgroupfs)**, bypassing the
     Docker REST API to minimize overhead.
+  - **`memory.stat` over `memory.current`:** computes `actual = memory.current -
+    inactive_file` to exclude reclaimable page-cache from RAM measurement (Metric #2).
   - **Adaptive Sampling:** 10s interval when CPU(t-1) > 60%; 30s otherwise.
+  - **Event-Driven Idle Detection:** Micro-Freezing idle state uses `cgroup.events`
+    `populated 0` signal instead of polling-based CPU threshold, eliminating
+    false-idle/false-active during inter-poll gaps.
 
 - **Layer 3: Hybrid Control Engine**
   - **3A. Guardrail:** emergency throttle if CPU > 80% OR RAM > 90% in ≥3 of last 5
@@ -93,6 +106,10 @@ Full technical spec: `architecture.md` §3.
     - Tier 3 (Soft): ratio < 1.5
   - **3C. Prediction:** fixed-alpha (0.2) EMA, O(1) memory. Fine-tunes Guardrail
     threshold sensitivity ahead of time — **not** applied directly as a shaping input.
+  - **Tier Hysteresis:** tier change commits only after the new tier is stable for 3
+    consecutive evaluations, preventing rapid oscillation noise in Metrics #1/#5.
+  - **PSI Internal Signal:** `cpu.pressure` `some avg10` supplements the Guardrail's
+    CPU/RAM thresholds as an internal control signal (not a new tracked metric).
 
 - **Layer 4: Adaptive Resource Shaping**
   - Translates Layer 3 decisions into live cgroups v2 parameter updates (`cpu.max`,
@@ -102,9 +119,17 @@ Full technical spec: `architecture.md` §3.
     for ≥2 seconds, Layer 4 writes `cgroup.freeze = 1` to drop CPU usage to exactly
     **0%** while keeping the container resident in RAM. On the next request, the
     container thaws in **<1ms**. Hard cap: 500–1000ms per freeze cycle.
+  - **zram-as-swap + `memory.swap.max`:** verifies zram-backed swap at cold start;
+    sets `memory.swap.max` to allow compressed swap (or 0 if no zram) to prevent
+    uncontrolled disk thrashing.
+  - **`memory.high` Soft-Brake:** writes `memory.high = 0.85 × memory.max` as a
+    kernel soft-throttle point before the hard OOM boundary, giving the Guardrail
+    time to react.
   - **TCP Backlog Verification:** at cold start, confirms the host's `somaxconn`
     value provides enough headroom to queue inbound packets during a freeze window
-    without dropping connections.
+    without dropping connections. Extended to also check app-level listen backlog
+    via `/proc/<pid>/net/tcp` — apps compiled with `listen(fd, 5)` will still drop
+    connections even if `somaxconn=4096`.
 
 #### 4.2 Energy Estimation — Hybrid Hardware/Software Model
 
@@ -281,6 +306,35 @@ All analysis at significance level α = 0.05:
 | 4 | Trusted Image Signing | `framework/security/image_signer.py` | Verifies container image signatures at cold start. Blocks backdoored images before runtime. |
 | 4 | Minimum Privilege Guard | `framework/security/privilege_guard.py` | Flags non-priority containers requesting `--privileged` mode at cold start. |
 | 5 | Encryption Cost Calculator | `framework/security/encryption_calc.py` | Estimates hybrid encryption (AES-RSA / AES-ECC) CPU cost before inter-container transfers. |
+| 6 | Watchdog Auto-Thaw | `framework/security/watchdog_thaw.py` | Monitors `cgroup.freeze` state; force-thaws containers stuck frozen beyond `2× max_duration`. |
+| 7 | Duty-Cycle Freeze | `framework/security/duty_cycle_freezer.py` | Rapid on/off freeze cycles for active non-priority containers under Tier 1 (defense, not energy metric). |
+| 8 | I/O Bandwidth Isolation | `framework/security/io_limiter.py` | Writes `io.max` to cap per-container disk I/O bandwidth. Outside 5 tracked metrics. |
+| 9 | Network Bandwidth Isolation | `framework/security/net_limiter.py` | Uses `tc` to cap per-container egress bandwidth. Outside 5 tracked metrics. |
+| 10 | Process Bomb Protection | `framework/security/pids_limiter.py` | Writes `pids.max` per non-priority container at cold start. Prevents fork-bomb DoS. |
 
-All modules are unit-tested in `tests/test_security.py` and enabled via
+All modules (#1–10) are unit-tested in `tests/test_security.py` and enabled via
 `SECURITY_ENABLED = True` in `framework/config.py`.
+
+---
+
+## Extended Vision (Discussed, Not Implemented)
+
+> The following concept was explored during design but is **not implemented in
+> code**. Documented as a future research direction — distinct from Appendix A
+> where all features have working code.
+
+**CRIU Checkpoint + zRAM Snapshot + eBPF Zero-Window Proxy:** escalate idle
+containers beyond Micro-Freezing to full memory checkpoint. Not implemented
+because: (1) CRIU is outside stdlib+NumPy constraint, (2) zero-window is
+unreliable behind cloud NAT, (3) checkpoint/restore takes 1–3s vs <1ms thaw,
+(4) would require metrics outside §9. Recommended as standalone follow-up study.
+
+---
+
+## Assumptions & Limitations
+
+| # | Assumption / Limitation | Mitigation |
+|---|------------------------|------------|
+| 1 | No active health-check proxy in front of non-priority containers. Freeze cycle 500–1000ms can trigger flapping with health-check intervals < 1s. | Tag such containers `hecf.priority=high` to exempt from freezing. Experimental setup uses direct Locust→container traffic only. |
+| 2 | Single-host, no container migration (§11). | By design — targets environments where orchestrator overhead exceeds savings. |
+| 3 | cgroups v2 unified hierarchy required (kernel ≥5.10). | Hard requirement documented in §2 and §5. |

@@ -30,28 +30,34 @@ level for maximum precision and minimum overhead.
 ```text
 +-----------------------------------------------------------------------------------+
 |                    Host OS (Linux, kernel ≥5.10, cgroups v2)                      |
-|                                                                                    |
-|  +-----------------------+     +------------------------------------------------+  |
-|  |  TARGET CONTAINERS    | <-- |               HECF ENGINE                      |  |
-|  |  (HttpArena:          |     |                                                |  |
-|  |   JSON / Static /     |     | [Layer 1: Profiler]   /proc + HW Sensor +      |  |
-|  |   Async DB)           |     |                       container tagging         |  |
-|  +-----------------------+     |                                                |  |
-|           |                   | [Layer 2: Monitor]    Adaptive Polling,         |  |
-|           v                   |                       cgroupfs v2 direct read   |  |
-|  +-----------------------+    |                                                |  |
-|  |   Docker Daemon API   | -> | [Layer 3: Hybrid Control Engine]                |  |
-|  |   (docker.sock)       |    |   3A. Guardrail  (3-of-5 emergency caps)        |  |
-|  +-----------------------+    |   3B. Tier Detector (Spike Ratio P95/P50)       |  |
-|           |                   |   3C. Predictor  (EMA alpha=0.2, O(1))          |  |
-|           v                   |                                                |  |
-|  +-----------------------+    | [Layer 4: Shaper]     cgroups v2 updates +      |  |
-|  |   Linux cgroups v2    | <- |                       Micro-Freezing            |  |
-|  +-----------------------+    |                                                |  |
-|                               | [Energy Estimator]    Hybrid HW Sensor / kWh   |  |
-|                               | [Overhead Tracker]    HECF's own CPU/RAM        |  |
-|                               | [Mode Selector]       4 runtime modes           |  |
-|                               +------------------------------------------------+  |
+|                                                                                   |
+|  [ LOCUST ]              +------------------------------------------------+       |
+|  Load Gen.               |               HECF ENGINE                      |       |
+|      |                   |                                                |       |
+|  +---v-------------------+ [Layer 1: Profiler]   /proc + HW Sensor +      |       |
+|  |  TARGET CONTAINERS    |                       container tagging        |       |
+|  |  (HttpArena:          |                                                |       |
+|  |   JSON / Static /     | [Layer 2: Monitor]    Adaptive Polling,        |       |
+|  |   Async DB)           |                       cgroupfs v2 direct read  |       |
+|  +-----------------------+                                                |       |
+|           |              | [Layer 3: Hybrid Control Engine]               |       |
+|           v              |   3A. Guardrail  (3-of-5 emergency caps)       |       |
+|  +-----------------------+   3B. Tier Detector (Spike Ratio P95/P50)      |       |
+|  | Docker Daemon API     |   3C. Predictor  (EMA alpha=0.2, O(1))         |       |
+|  | (docker.sock)         |                                                |       |
+|  +-----------------------+ [Layer 4: Shaper]     cgroups v2 updates +     |       |
+|           |              |                       Micro-Freezing           |       |
+|           v              |                                                |       |
+|  +-----------------------+ [Energy Estimator]    Hybrid HW Sensor / kWh   |       |
+|  |   Linux cgroups v2    |                                                |       |
+|  +-----------------------+ [Overhead Tracker]    HECF's own CPU/RAM       |       |
+|                            [Mode Selector]       4 runtime modes          |       |
+|                          +-------------------------+----------------------+       |
+|                                                    |                              |
+|                          +-------------------------v----------------------+       |
+|                          |     HECF DASHBOARD (Flask / Web UI)            |       |
+|                          |     Displays the 5 Core Tracked Metrics        |       |
+|                          +------------------------------------------------+       |
 +-----------------------------------------------------------------------------------+
 ```
 
@@ -70,10 +76,9 @@ Runs at cold start to build a complete hardware and environment profile of the h
   `/sys/class/powercap/intel-rapl/` and AMD energy at `/sys/class/hwmon/`. If found,
   real-time electrical data is used. If blocked (e.g., inside a cloud VPS), the
   framework logs a notice and falls back to the validated software estimation model.
-- **Cold-Start Fallback Policy:** for the first `120` samples (before Layer 3B's
-  sliding window has enough history), the system forces **Tier 2 (Balanced)**.
-  Rationale: starting in Tier 1 (Aggressive) risks cold-start latency degradation;
-  starting in Tier 3 (Soft) risks resource exhaustion before enough data exists.
+- **Cold-Start Fallback Policy:** for the first `30` samples (revised from 120 —
+  at 30s polling, 120 samples = 60 min > the 30-min run), the system forces
+  **Tier 2 (Balanced)**.
 - **Container Tagging:** reads Docker container labels to classify each target as:
   - `priority` — e.g. database / Async DB containers. Never receive a hard CPU cap
     from the Guardrail, to avoid data corruption from starved I/O.
@@ -81,17 +86,30 @@ Runs at cold start to build a complete hardware and environment profile of the h
     throttle first and more aggressively under load.
   - Implementation: Docker container labels (e.g. `hecf.priority=high|low`), read
     once at Layer 1 init and cached for Layer 4.
+- **Host `/proc` Mount Verification:** cross-checks `/proc/cpuinfo` CPU count
+  against `os.cpu_count()` to confirm the host's `/proc` is mounted (not the
+  container's own). Requires `pid: host` in `docker-compose.yml`.
+- **Network-Infra Auto-Priority:** auto-detects containers matching known
+  proxy/DNS image patterns (`nginx`, `caddy`, `traefik`, `cloudflared`, `coredns`)
+  and forces `priority=True` to prevent freezing/throttling network infrastructure.
+- **`nf_conntrack_max` Pre-flight:** reads `/proc/sys/net/netfilter/nf_conntrack_max`
+  and warns if below `65536`. Extends the TCP Backlog Verification pattern.
 
 #### Layer 2: Monitoring Engine (`framework/monitor.py`)
 
 Reads CPU/Memory metrics **directly from cgroupfs (v2 unified hierarchy)**,
 bypassing the Docker REST API to minimize monitoring overhead:
 - CPU: `/sys/fs/cgroup/<container>/cpu.stat`
-- Memory: `/sys/fs/cgroup/<container>/memory.current`
+- Memory: `/sys/fs/cgroup/<container>/memory.stat` (computes `actual = memory.current
+  - inactive_file` to exclude reclaimable page-cache from RAM measurement).
 
 **Adaptive Sampling (proposal §3.2.3):**
 - If CPU utilization at `t-1` **> 60%** → poll every **10 seconds**
 - Otherwise → poll every **30 seconds**
+
+**Event-Driven Idle Detection:** Micro-Freezing idle state is detected via
+`cgroup.events` `populated 0` signal (kernel notification when no active processes
+remain), replacing polling-based `cpu_percent < 1.0` to eliminate false-idle/active.
 
 Target: all monitoring overhead combined must stay within the global **<5%**
 framework overhead budget (measured by the Overhead Tracker, §4).
@@ -106,6 +124,10 @@ The centralized decision layer combining reactive, analytic, and proactive contr
     in **at least 3 of the last 5** samples.
   - The 3-of-5 rule avoids false positives on harmless micro-spikes while still
     reacting before OOM.
+  - **PSI Internal Signal:** Layer 3A reads `<cgroup>/cpu.pressure` (`some avg10`)
+    as a supplementary internal signal alongside CPU/RAM thresholds. If PSI
+    `some avg10 > 25.0` AND the 3-of-5 condition is met, Guardrail confidence is
+    elevated (logged as `GUARDRAIL+PSI`). PSI is NOT a new tracked metric.
 
 - **3B. Tier Detector (`framework/tier_detector.py`)** — *analytic*
   - Sliding window of the last **120** samples.
@@ -116,6 +138,11 @@ The centralized decision layer combining reactive, analytic, and proactive contr
   | 1 | Aggressive | `spike_ratio > 2.0` |
   | 2 | Balanced | `1.5 ≤ spike_ratio ≤ 2.0` |
   | 3 | Soft | `spike_ratio < 1.5` |
+
+  - **Tier Transition Hysteresis:** a tier change commits only after the new tier
+    has been stable for `TIER_HYSTERESIS_SAMPLES` (default: 3) consecutive evaluations.
+    Prevents rapid oscillation (e.g. Tier 2→1→2→1) that introduces noise into
+    Metrics #1 and #5. Configurable via `HECF_TIER_HYSTERESIS` env var.
 
 - **3C. Predictor (`framework/predictor.py`)** — *proactive*
   - **EMA (Exponential Moving Average)**, fixed `alpha = 0.2` (filters high-frequency
@@ -151,6 +178,13 @@ Extends Layer 4 shaping with a sub-second, zero-CPU idle mechanism:
   in the host's TCP backlog (`net.core.somaxconn`) rather than being dropped. At
   cold start, `framework/security/tcp_backlog_manager.py` inspects the host's
   `somaxconn` value to confirm sufficient headroom for the expected freeze window.
+  Extended to also verify app-level listen backlog via `/proc/<pid>/net/tcp`.
+- **zram-as-swap + `memory.swap.max`:** verifies zram-backed swap at cold start;
+  sets `memory.swap.max` accordingly (compressed swap if zram present, 0 otherwise)
+  to prevent uncontrolled disk thrashing on constrained hosts.
+- **`memory.high` Soft-Brake:** writes `memory.high = 0.85 × memory.max` as a
+  kernel soft-throttle point. When crossed, the kernel slows allocation rate,
+  giving the Guardrail time to react before the hard `memory.max` OOM boundary.
 
 ---
 
@@ -393,26 +427,30 @@ required by proposal §4.4.1.
 
 | Constant | Value | Source |
 |----------|-------|--------|
-| `COLD_START_SAMPLES` | 120 | proposal §3.2.2 |
-| `FALLBACK_TIER` | 2 (Balanced) | proposal §3.2.2 |
-| `SAMPLING_CPU_THRESHOLD` | 60% | proposal §3.2.3 |
-| `SAMPLING_INTERVAL_HIGH` | 10s | proposal §3.2.3 |
-| `SAMPLING_INTERVAL_LOW` | 30s | proposal §3.2.3 |
-| `GUARDRAIL_WINDOW` | 5 samples | proposal §3.2.4 (3A) |
-| `GUARDRAIL_TRIGGER_COUNT` | 3 of 5 | proposal §3.2.4 (3A) |
-| `GUARDRAIL_CPU_THRESHOLD` | 80% | proposal §3.2.4 (3A) |
-| `GUARDRAIL_RAM_THRESHOLD` | 90% | proposal §3.2.4 (3A) |
-| `TIER_WINDOW` | 120 samples | proposal §3.2.4 (3B) |
-| `TIER1_AGGRESSIVE_RATIO` | > 2.0 | proposal Table 3.1 |
-| `TIER2_BALANCED_RATIO` | 1.5 – 2.0 | proposal Table 3.1 |
-| `TIER3_SOFT_RATIO` | < 1.5 | proposal Table 3.1 |
-| `EMA_ALPHA` | 0.2 | proposal §3.2.4 (3C) |
-| `FRAMEWORK_OVERHEAD_TARGET` | < 5% | proposal §1, §3.5 |
-| `P_IDLE_WATTS` | Dynamic (cpu_count × 3.75W) | proposal §3.5.1 |
-| `P_MAX_WATTS` | Dynamic (cpu_count × 13.5W) | proposal §3.5.1 |
-| `STATIC_CAP_CPU_PERCENT` | 80% (baseline mode only) | proposal §3.4.4 |
-| `MICRO_FREEZE_IDLE_TRIGGER_S` | 2.0 | Layer 4 Micro-Freezing |
-| `MICRO_FREEZE_MAX_DURATION_MS` | 1000 | Layer 4 Micro-Freezing cap |
+| `COLD_START_SAMPLES`       | 30 (revised)       | Gap audit: 120×30s > 30min run |
+| `FALLBACK_TIER`            | 2 (Balanced)       | proposal §3.2.2 |
+| `SAMPLING_CPU_THRESHOLD`   | 60%                | proposal §3.2.3 |
+| `SAMPLING_INTERVAL_HIGH`   | 10s                | proposal §3.2.3 |
+| `SAMPLING_INTERVAL_LOW`    | 30s                | proposal §3.2.3 |
+| `GUARDRAIL_WINDOW`         | 5 samples          | proposal §3.2.4 (3A) |
+| `GUARDRAIL_TRIGGER_COUNT`  | 3 of 5             | proposal §3.2.4 (3A) |
+| `GUARDRAIL_CPU_THRESHOLD`  | 80%                | proposal §3.2.4 (3A) |
+| `GUARDRAIL_RAM_THRESHOLD`  | 90%                | proposal §3.2.4 (3A) |
+| `TIER_WINDOW`              | 120 samples        | proposal §3.2.4 (3B) |
+| `TIER1_AGGRESSIVE_RATIO`   | > 2.0              | proposal Table 3.1 |
+| `TIER2_BALANCED_RATIO`     | 1.5 – 2.0          | proposal Table 3.1 |
+| `TIER3_SOFT_RATIO`         | < 1.5              | proposal Table 3.1 |
+| `TIER_HYSTERESIS_SAMPLES`  | 3                  | Tier transition debounce |
+| `EMA_ALPHA`                | 0.2                | proposal §3.2.4 (3C) |
+| `FRAMEWORK_OVERHEAD_TARGET`| < 5%               | proposal §1, §3.5 |
+| `PSI_SOME_AVG10_THRESHOLD` | 25.0               | Internal Guardrail signal |
+| `MEMORY_HIGH_RATIO`        | 0.85               | Soft-brake before memory.max |
+| `CONNTRACK_MIN`            | 65536              | nf_conntrack pre-flight |
+| `P_IDLE_WATTS`             | Dynamic (cpu_count × 3.75W) | proposal §3.5.1 |
+| `P_MAX_WATTS`              | Dynamic (cpu_count × 13.5W) | proposal §3.5.1 |
+| `STATIC_CAP_CPU_PERCENT`   | 80% (baseline mode only) | proposal §3.4.4 |
+| `MICRO_FREEZE_IDLE_TRIGGER_S` | 2.0             | Layer 4 Micro-Freezing |
+| `MICRO_FREEZE_MAX_DURATION_MS` | 1000            | Layer 4 Micro-Freezing cap |
 
 ---
 
@@ -437,6 +475,11 @@ required by proposal §4.4.1.
 | 4 | Trusted Image Signing | `framework/security/image_signer.py` | Layer 1 | Verifies container image digital signatures against a trusted key list at cold start. Blocks backdoored images before they are ever managed. |
 | 4 | Minimum Privilege Guard | `framework/security/privilege_guard.py` | Layer 1 | Rejects or flags non-priority containers requesting host-root (`--privileged`) mode. Runs once at cold start, not in the runtime loop. |
 | 5 | Encryption Cost Calculator | `framework/security/encryption_calc.py` | Layer 3 | Estimates CPU cost of hybrid encryption (AES-RSA / AES-ECC) for inter-container data transfers and feeds the estimate into Layer 3's constraint calculation. |
+| 6 | Watchdog Auto-Thaw | `framework/security/watchdog_thaw.py` | Layer 4 | Monitors `cgroup.freeze` state; force-thaws containers stuck frozen beyond `2× MICRO_FREEZE_MAX_DURATION_MS`. Safety-net for kernel race conditions or missed thaw signals. |
+| 7 | Duty-Cycle Freeze (Aggressive) | `framework/security/duty_cycle_freezer.py` | Layer 4 | Rapid on/off freeze cycles (200ms frozen / 800ms running) for active non-priority containers under Tier 1. Defense/stability mechanism, not an energy metric. |
+| 8 | I/O Bandwidth Isolation | `framework/security/io_limiter.py` | Layer 4 | Writes `io.max` in cgroupfs to cap per-container disk I/O bandwidth. Prevents I/O monopolization. Outside 5 tracked metrics — hardening only. |
+| 9 | Network Bandwidth Isolation | `framework/security/net_limiter.py` | Layer 4 | Uses `tc` (traffic control) `htb` qdisc to cap per-container egress bandwidth. Prevents bandwidth starvation. Outside 5 tracked metrics. |
+| 10 | Process Bomb Protection | `framework/security/pids_limiter.py` | Layer 1 | Writes `pids.max` per non-priority container at cold start. Prevents fork-bomb or thread-leak DoS. Pattern identical to `privilege_guard.py`. |
 
 ### A.2 Why Hidden?
 
@@ -451,14 +494,38 @@ required by proposal §4.4.1.
 
 ### A.3 How to Activate / Demonstrate
 
-All safenet features are **enabled by default** via `framework/config.py`:
+All safenet features (#1–10) are **enabled by default** via `framework/config.py`:
 ```python
-SECURITY_ENABLED = True       # Controls image_signer, privilege_guard, ebpf_sensor,
-                               # ddos_filter, edos_guard, coresident_placement,
-                               # sandbox_isolator, encryption_calc
+SECURITY_ENABLED = True       # Controls #1-5 (existing) + #6-10 (new):
+                               #   watchdog_thaw, duty_cycle_freezer,
+                               #   io_limiter, net_limiter, pids_limiter
 MICRO_FREEZE_ENABLED = True   # Controls micro_freezer, tcp_backlog_manager
 ```
 
 To demonstrate during a defense, simply point the examiner to the relevant file in
 `framework/security/` — the code is production-ready and unit-tested in
 `tests/test_security.py`.
+
+---
+
+## Extended Vision (Discussed, Not Implemented)
+
+> The following concept was explored during design but is **not implemented in
+> code**. Documented as a future research direction — distinct from Appendix A
+> where all features have working code.
+
+**CRIU Checkpoint + zRAM Snapshot + eBPF Zero-Window Proxy:** escalate idle
+containers beyond Micro-Freezing to full memory checkpoint. Not implemented
+because: (1) CRIU is outside stdlib+NumPy constraint, (2) zero-window is
+unreliable behind cloud NAT, (3) checkpoint/restore takes 1–3s vs <1ms thaw,
+(4) would require metrics outside §9. Recommended as standalone follow-up study.
+
+---
+
+## Assumptions & Limitations
+
+| # | Assumption / Limitation | Mitigation |
+|---|------------------------|------------|
+| 1 | No active health-check proxy in front of non-priority containers. Freeze cycle 500–1000ms can trigger flapping with health-check intervals < 1s. | Tag such containers `hecf.priority=high`. Experimental setup uses direct Locust→container traffic only. |
+| 2 | Single-host, no container migration. | By design — targets environments where orchestrator overhead exceeds savings. |
+| 3 | cgroups v2 unified hierarchy required (kernel ≥5.10). | Hard requirement documented in §2 and §5. |

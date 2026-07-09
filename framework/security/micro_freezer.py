@@ -49,11 +49,13 @@ class MicroFreezer:
         self._ebpf_sensor = ebpf_sensor
         self._dry_run = dry_run
 
-        # container_id -> {"frozen": bool, "frozen_at": float, "last_activity": float}
+        # container_id -> {"frozen": bool, "frozen_at": float, "last_activity": float,
+        #                  "populated": bool}
         self._state = {}
 
         logger.info(
-            "Micro-Freezer initialized (idle_trigger=%.1fs, max_freeze=%dms, dry_run=%s)",
+            "Micro-Freezer initialized (idle_trigger=%.1fs, max_freeze=%dms, "
+            "dry_run=%s, idle_mode=event+fallback)",
             idle_trigger_seconds, max_freeze_duration_ms, dry_run
         )
 
@@ -111,8 +113,23 @@ class MicroFreezer:
 
         # Check idle duration
         idle_duration = now - state["last_activity"]
-        if idle_duration < self._idle_trigger:
-            return {"action": "none", "reason": f"not_idle_enough:{idle_duration:.1f}s"}
+
+        # === Event-Driven Idle Detection (Gap #2) ===
+        # Primary: check cgroup.events 'populated' field
+        # populated=0 means kernel confirms no active processes in cgroup
+        populated = self._check_populated(container_id)
+        if populated is not None:
+            # Event-driven mode available
+            if populated:
+                # Kernel says processes are active — not idle
+                return {"action": "none", "reason": "populated_active"}
+            # populated=0 AND idle duration met — safe to freeze
+            if idle_duration < self._idle_trigger:
+                return {"action": "none", "reason": f"depopulated_but_too_recent:{idle_duration:.1f}s"}
+        else:
+            # Fallback: polling-based idle check (cgroup.events unavailable)
+            if idle_duration < self._idle_trigger:
+                return {"action": "none", "reason": f"not_idle_enough:{idle_duration:.1f}s"}
 
         # Container is idle long enough → check safety before freezing
         # SAFETY CHECK: no uncommitted database transaction in flight
@@ -200,3 +217,33 @@ class MicroFreezer:
             if self._state[cid]["frozen"]:
                 self._thaw(cid, reason="container_disappeared")
             del self._state[cid]
+
+    def _check_populated(self, container_id: str):
+        """
+        Read cgroup.events 'populated' field (Gap #2).
+        Returns True if populated (processes active), False if depopulated,
+        None if cgroup.events is unavailable.
+        """
+        events_path = self._get_events_path(container_id)
+        if not events_path:
+            return None
+        try:
+            with open(events_path) as f:
+                for line in f:
+                    if line.startswith("populated"):
+                        return int(line.split()[1]) == 1
+        except (OSError, ValueError, IndexError):
+            pass
+        return None
+
+    def _get_events_path(self, container_id: str) -> str:
+        """Find the cgroup.events file for a container."""
+        paths = [
+            f"/sys/fs/cgroup/system.slice/docker-{container_id}.scope/cgroup.events",
+            f"/sys/fs/cgroup/docker/{container_id}/cgroup.events",
+            f"/sys/fs/cgroup/system.slice/docker.service/docker-{container_id}.scope/cgroup.events",
+        ]
+        for p in paths:
+            if os.path.exists(p):
+                return p
+        return None

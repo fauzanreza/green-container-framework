@@ -16,16 +16,24 @@ GUARDRAIL_RAM_THRESHOLD  = float(os.getenv("HECF_GUARDRAIL_RAM_THRESHOLD", 90.0)
 
 # === Tier Detection (Layer 3B) ===
 TIER_WINDOW              = int(os.getenv("HECF_TIER_WINDOW", 120))
-COLD_START_SAMPLES       = int(os.getenv("HECF_COLD_START_SAMPLES", 120))
+COLD_START_SAMPLES       = int(os.getenv("HECF_COLD_START_SAMPLES", 30))  # revised: 120×30s > 30min run
 FALLBACK_TIER            = int(os.getenv("HECF_FALLBACK_TIER", 2))
 TIER1_AGGRESSIVE_RATIO   = float(os.getenv("HECF_TIER1_RATIO", 2.0))
 TIER2_BALANCED_RATIO     = float(os.getenv("HECF_TIER2_RATIO", 1.5))
+TIER_HYSTERESIS_SAMPLES  = int(os.getenv("HECF_TIER_HYSTERESIS", 3))
 
 # === Predictor (Layer 3C) ===
 EMA_ALPHA                = float(os.getenv("HECF_EMA_ALPHA", 0.2))
 
 # === Framework Overhead Target ===
 FRAMEWORK_OVERHEAD_TARGET = float(os.getenv("HECF_OVERHEAD_TARGET", 5.0))
+
+# === PSI Internal Guardrail Signal (Gap #10) ===
+PSI_ENABLED              = os.getenv("HECF_PSI_ENABLED", "true").lower() == "true"
+PSI_SOME_AVG10_THRESHOLD = float(os.getenv("HECF_PSI_THRESHOLD", 25.0))
+
+# === Memory Soft-Brake (Gap #9) ===
+MEMORY_HIGH_RATIO        = float(os.getenv("HECF_MEMORY_HIGH_RATIO", 0.85))
 
 # === Energy Estimation ===
 P_IDLE_WATTS             = float(os.getenv("HECF_P_IDLE_WATTS", 15.0))
@@ -74,6 +82,9 @@ MICRO_FREEZE_MAX_DURATION_MS = float(os.getenv("HECF_MICRO_FREEZE_MAX_MS", 1000.
 # === TCP Backlog (Layer 4 ext, §10.5) ===
 SOMAXCONN_MIN_HEADROOM   = int(os.getenv("HECF_SOMAXCONN_MIN", 4096))
 
+# === Conntrack Pre-flight (Gap #17) ===
+CONNTRACK_MIN            = int(os.getenv("HECF_CONNTRACK_MIN", 65536))
+
 # === DDoS Filter (Layer 2 ext, §10.3) ===
 DDOS_PACKET_RATE_THRESHOLD = float(os.getenv("HECF_DDOS_RATE_THRESHOLD", 1000.0))
 
@@ -89,6 +100,10 @@ EXCLUDED_CONTAINERS = [
     "hecf-dashboard",
     "locust"
 ]
+
+# === Network-Infra Auto-Priority Patterns (Gap #15) ===
+NETWORK_INFRA_PATTERNS   = ["nginx", "caddy", "traefik", "cloudflared",
+                            "coredns", "haproxy", "envoy"]
 
 # Mode selection (default_docker, static_cap, reactive_only, full_hecf)
 MODE = os.getenv("HECF_MODE", "full_hecf")

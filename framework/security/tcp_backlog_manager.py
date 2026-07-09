@@ -124,3 +124,70 @@ class TCPBacklogManager:
     @property
     def somaxconn(self) -> int:
         return self._current_somaxconn
+
+    def check_app_backlog(self, container_name: str, container_id: str) -> dict:
+        """
+        Check app-level listen backlog via /proc/<pid>/net/tcp (Gap #16).
+        Even if somaxconn=4096, an app compiled with listen(fd, 5) will still
+        drop connections during a freeze window.
+
+        Returns: {"safe": bool, "min_backlog": int, "recommendation": str}
+        """
+        min_backlog = 128  # Minimum safe backlog for micro-freezing
+
+        # Try to find container's init PID
+        try:
+            import docker
+            client = docker.from_env()
+            container = client.containers.get(container_id)
+            pid = container.attrs.get("State", {}).get("Pid", 0)
+        except Exception:
+            return {"safe": True, "min_backlog": -1,
+                    "recommendation": "could_not_check"}
+
+        if not pid or pid <= 0:
+            return {"safe": True, "min_backlog": -1,
+                    "recommendation": "no_pid"}
+
+        # Parse /proc/<pid>/net/tcp for LISTEN sockets (state=0A)
+        tcp_path = f"/proc/{pid}/net/tcp"
+        try:
+            lowest_backlog = float("inf")
+            with open(tcp_path) as f:
+                for line in f:
+                    parts = line.split()
+                    if len(parts) >= 5 and parts[3] == "0A":  # LISTEN state
+                        # tx_queue:rx_queue — tx_queue for LISTEN = backlog
+                        queues = parts[4].split(":")
+                        tx_queue = int(queues[0], 16)
+                        if tx_queue > 0:
+                            lowest_backlog = min(lowest_backlog, tx_queue)
+
+            if lowest_backlog == float("inf"):
+                return {"safe": True, "min_backlog": -1,
+                        "recommendation": "no_listen_sockets"}
+
+            safe = lowest_backlog >= min_backlog
+            result = {
+                "safe": safe,
+                "min_backlog": lowest_backlog,
+            }
+
+            if safe:
+                result["recommendation"] = "ok"
+                logger.debug("[TCP] App backlog check PASSED for %s (min=%d)",
+                            container_name, lowest_backlog)
+            else:
+                result["recommendation"] = (
+                    f"app listen backlog={lowest_backlog} < {min_backlog} — "
+                    f"micro-freeze may drop connections"
+                )
+                logger.warning(
+                    "[TCP] App backlog LOW for %s: min_backlog=%d < %d",
+                    container_name, lowest_backlog, min_backlog
+                )
+            return result
+
+        except OSError:
+            return {"safe": True, "min_backlog": -1,
+                    "recommendation": "tcp_not_readable"}

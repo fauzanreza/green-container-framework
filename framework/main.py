@@ -155,6 +155,34 @@ def _init_security(host_profile: dict):
                 "consider: %s", tcp_result["recommendation"]
             )
 
+    # === Kategori 2 Hidden Modules (Appendix A #6-10) ===
+    if SECURITY_ENABLED:
+        # #6: Watchdog Auto-Thaw
+        from .security.watchdog_thaw import WatchdogThaw
+        watchdog = WatchdogThaw(
+            max_freeze_duration_ms=MICRO_FREEZE_MAX_DURATION_MS,
+            dry_run=DRY_RUN,
+        )
+        if MICRO_FREEZE_ENABLED:
+            watchdog.start()
+        components["watchdog_thaw"] = watchdog
+
+        # #7: Duty-Cycle Freezer
+        from .security.duty_cycle_freezer import DutyCycleFreezer
+        components["duty_cycle_freezer"] = DutyCycleFreezer(dry_run=DRY_RUN)
+
+        # #8: I/O Limiter
+        from .security.io_limiter import IOLimiter
+        components["io_limiter"] = IOLimiter(dry_run=DRY_RUN)
+
+        # #9: Net Limiter (best-effort, requires tc)
+        from .security.net_limiter import NetLimiter
+        components["net_limiter"] = NetLimiter(dry_run=DRY_RUN)
+
+        # #10: PID Limiter
+        from .security.pids_limiter import PidsLimiter
+        components["pids_limiter"] = PidsLimiter(dry_run=DRY_RUN)
+
     return components
 
 
@@ -302,8 +330,12 @@ def main():
                 edos_action = edos_result["action"]
 
             # Layer 3A — pass EMA prediction for pre-warning (full_hecf only)
+            # Also pass cgroup_path for PSI internal signal (Gap #10)
             ema_for_guardrail = ema_pred if OperationMode.is_predictor_enabled(MODE) else None
-            guardrail_active = guardrail.update(name, cpu, mem, ema_pred=ema_for_guardrail)
+            cgroup_path = monitor._get_cgroup_path(cid)
+            guardrail_active = guardrail.update(
+                name, cpu, mem, ema_pred=ema_for_guardrail, cgroup_path=cgroup_path
+            )
 
             # Mode Selection Logic
             action = "OBSERVE"
@@ -485,6 +517,12 @@ def _apply_security_gates(targets_meta: dict, security: dict) -> dict:
                 continue
 
         filtered[name] = meta
+
+        # === Hidden Module Cold-Start Application (Appendix A #8, #10) ===
+        if "pids_limiter" in security:
+            security["pids_limiter"].apply(name, cid, priority)
+        if "io_limiter" in security:
+            security["io_limiter"].apply(name, cid, priority)
 
     return filtered
 
