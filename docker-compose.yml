@@ -23,7 +23,8 @@ services:
   hecf-dashboard:
     build: .
     container_name: hecf-dashboard
-    command: ["python", "dashboard.py"]
+    # Gunicorn: 4 threaded workers — handles concurrent requests without 524 timeout
+    command: ["gunicorn", "--bind", "0.0.0.0:8092", "--workers", "2", "--threads", "4", "--timeout", "60", "dashboard:app"]
     ports:
       - "8092:8092"
     volumes:
@@ -32,6 +33,9 @@ services:
       - ./priority_map.json:/app/priority_map.json
       - /proc/cpuinfo:/proc/cpuinfo:ro
       - /proc/meminfo:/proc/meminfo:ro
+      - /proc/stat:/proc/stat:ro
+      - /proc/loadavg:/proc/loadavg:ro
+      - /proc/uptime:/proc/uptime:ro
     restart: unless-stopped
     networks:
       - hecf-network
