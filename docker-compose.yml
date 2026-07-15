@@ -13,8 +13,9 @@ services:
       - ./metrics.csv:/app/metrics.csv
       - ./framework_status.json:/app/framework_status.json
       - ./priority_map.json:/app/priority_map.json
+      - ./targets.json:/app/targets.json          # Managed container whitelist (UI-editable)
+      - ./discovered_containers.json:/app/discovered_containers.json  # Written by engine, read by dashboard
     environment:
-      - HECF_TARGETS=""
       - HECF_MODE=full_hecf
     restart: unless-stopped
     networks:
@@ -31,6 +32,8 @@ services:
       - ./metrics.csv:/app/metrics.csv:ro
       - ./framework_status.json:/app/framework_status.json
       - ./priority_map.json:/app/priority_map.json
+      - ./targets.json:/app/targets.json             # Read + write from dashboard UI
+      - ./discovered_containers.json:/app/discovered_containers.json:ro  # Read-only: written by engine
       - /proc/cpuinfo:/proc/cpuinfo:ro
       - /proc/meminfo:/proc/meminfo:ro
       - /proc/stat:/proc/stat:ro

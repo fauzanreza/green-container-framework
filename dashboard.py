@@ -263,6 +263,87 @@ HTML_TEMPLATE = """
 
         /* ---- CHART & LEGEND ---- */
         #resourceChart { min-height: 250px; }
+
+        /* ---- MANAGED CONTAINERS PANEL ---- */
+        .target-panel {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            box-shadow: var(--shadow);
+            margin-bottom: 24px;
+        }
+        .target-mode-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 3px 10px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 700;
+        }
+        .mode-all { background: #fef3c7; color: #92400e; }
+        .mode-whitelist { background: #dcfce7; color: #15803d; }
+        .container-cards {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            padding: 16px 20px;
+        }
+        .c-card {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 7px 12px;
+            border-radius: 10px;
+            border: 1.5px solid;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.18s;
+            user-select: none;
+        }
+        .c-card.managed {
+            background: #f0fdf4;
+            border-color: #86efac;
+            color: #15803d;
+        }
+        .c-card.managed:hover {
+            background: #fee2e2;
+            border-color: #fca5a5;
+            color: #dc2626;
+        }
+        .c-card.available {
+            background: #f8fafc;
+            border-color: #e2e8f0;
+            color: #475569;
+        }
+        .c-card.available:hover {
+            background: #f0fdf4;
+            border-color: #86efac;
+            color: #15803d;
+        }
+        .c-card .c-dot {
+            width: 7px; height: 7px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .c-card.managed .c-dot { background: #22c55e; }
+        .c-card.available .c-dot { background: #94a3b8; }
+        .c-card .c-icon { font-size: 13px; }
+        .c-divider {
+            padding: 4px 20px 0;
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+        }
+        .c-empty {
+            color: var(--text-muted);
+            font-size: 12px;
+            font-style: italic;
+            padding: 4px 0;
+        }
         .custom-legend {
             display: flex;
             flex-wrap: wrap;
@@ -555,6 +636,29 @@ HTML_TEMPLATE = """
         </div>
     </div>
 
+    <!-- Managed Containers Panel -->
+    <div class="target-panel">
+        <div class="panel-header">
+            <div class="d-flex align-items-center gap-3">
+                <h6 style="margin:0;">🎯 HECF Managed Containers</h6>
+                <span class="target-mode-badge mode-all" id="target-mode-badge">⚡ All Containers</span>
+            </div>
+            <span style="font-size:12px;color:var(--text-muted);">Click to add/remove from HECF optimization scope</span>
+        </div>
+        <div id="managed-section">
+            <div class="c-divider">✅ Managed by HECF (click to remove)</div>
+            <div class="container-cards" id="managed-cards">
+                <span class="c-empty">Loading…</span>
+            </div>
+        </div>
+        <div style="border-top: 1px dashed var(--border);" id="available-section">
+            <div class="c-divider">○ Available (not managed, click to add)</div>
+            <div class="container-cards" id="available-cards">
+                <span class="c-empty">Loading…</span>
+            </div>
+        </div>
+    </div>
+
     <!-- Container Table -->
     <div class="panel">
         <div class="panel-header">
@@ -838,6 +942,78 @@ window.updatePriority = async function(container, priority) {
 
 setInterval(fetchMetrics, 3000);
 fetchMetrics();
+
+// === Managed Containers Panel ===
+async function fetchTargets() {
+    try {
+        const res = await fetch('/api/targets');
+        const data = await res.json();
+        const managed = data.managed || [];
+        const discovered = data.discovered || {};
+        const isWhitelist = data.mode === 'whitelist';
+
+        // Update mode badge
+        const badge = document.getElementById('target-mode-badge');
+        if (isWhitelist) {
+            badge.className = 'target-mode-badge mode-whitelist';
+            badge.textContent = `✅ Whitelist (${managed.length} selected)`;
+        } else {
+            badge.className = 'target-mode-badge mode-all';
+            badge.textContent = '⚡ All Containers (no filter)';
+        }
+
+        // Split containers into managed vs available
+        const managedSet = new Set(managed);
+        let managedHtml = '';
+        let availableHtml = '';
+
+        // Managed cards first
+        managed.forEach(name => {
+            const info = discovered[name] || {};
+            const img = info.image ? info.image.split('/').pop().split(':')[0] : name;
+            managedHtml += `<div class="c-card managed" onclick="toggleTarget('${name}', 'remove')" title="Click to remove from HECF">
+                <span class="c-dot"></span>
+                <span>${name}</span>
+                <span class="c-icon" style="opacity:0.5;font-size:11px;">✕</span>
+            </div>`;
+        });
+
+        // Available cards
+        Object.entries(discovered).forEach(([name, info]) => {
+            if (!managedSet.has(name)) {
+                availableHtml += `<div class="c-card available" onclick="toggleTarget('${name}', 'add')" title="Click to add to HECF">
+                    <span class="c-dot"></span>
+                    <span>${name}</span>
+                    <span class="c-icon">+</span>
+                </div>`;
+            }
+        });
+
+        document.getElementById('managed-cards').innerHTML =
+            managedHtml || '<span class="c-empty">None selected — HECF managing ALL containers</span>';
+        document.getElementById('available-cards').innerHTML =
+            availableHtml || '<span class="c-empty">All containers are managed</span>';
+
+        // Hide available section if in "all" mode and nothing excluded
+        document.getElementById('available-section').style.display =
+            (!isWhitelist && Object.keys(discovered).length === 0) ? 'none' : 'block';
+
+    } catch(e) { console.error('fetchTargets error:', e); }
+}
+
+window.toggleTarget = async function(container, action) {
+    try {
+        await fetch('/api/targets', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({container, action})
+        });
+        fetchTargets();
+    } catch(e) { console.error('toggleTarget error:', e); }
+};
+
+setInterval(fetchTargets, 5000);
+fetchTargets();
 </script>
 </body>
 </html>
@@ -847,6 +1023,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CSV_PATH = os.path.join(BASE_DIR, "metrics.csv")
 STATUS_PATH = os.path.join(BASE_DIR, "framework_status.json")
 PRIORITY_MAP_PATH = os.path.join(BASE_DIR, "priority_map.json")
+TARGETS_PATH = os.path.join(BASE_DIR, "targets.json")
+DISCOVERED_PATH = os.path.join(BASE_DIR, "discovered_containers.json")
 FIELDNAMES = ["time","container_name","cpu_percent","mem_percent","tier","action",
               "power_watt","energy_kwh","ema_pred","alpha","spike_ratio","p50","p95",
               "overhead_cpu","overhead_mem"]
@@ -918,6 +1096,62 @@ def set_priority():
             json.dump(current_map, f, indent=2)
             
     return jsonify({"status": "ok", "map": current_map})
+
+
+@app.route("/api/targets")
+def get_targets():
+    """Returns managed whitelist + full discovered container list for the UI."""
+    managed = []
+    if os.path.isfile(TARGETS_PATH):
+        try:
+            with open(TARGETS_PATH) as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    managed = data
+        except:
+            pass
+
+    discovered = {}
+    if os.path.isfile(DISCOVERED_PATH):
+        try:
+            with open(DISCOVERED_PATH) as f:
+                discovered = json.load(f)
+        except:
+            pass
+
+    return jsonify({
+        "managed": managed,
+        "discovered": discovered,
+        "mode": "whitelist" if managed else "all"
+    })
+
+
+@app.route("/api/targets", methods=["POST"])
+def update_targets():
+    """Add or remove a container from the managed whitelist."""
+    req = request.json
+    action = req.get("action")    # "add" | "remove"
+    container = req.get("container")
+
+    current = []
+    if os.path.isfile(TARGETS_PATH):
+        try:
+            with open(TARGETS_PATH) as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    current = data
+        except:
+            pass
+
+    if action == "add" and container and container not in current:
+        current.append(container)
+    elif action == "remove" and container in current:
+        current.remove(container)
+
+    with open(TARGETS_PATH, "w") as f:
+        json.dump(current, f, indent=2)
+
+    return jsonify({"status": "ok", "managed": current, "mode": "whitelist" if current else "all"})
 
 
 

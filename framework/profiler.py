@@ -91,11 +91,9 @@ def profile_host() -> dict:
 def discover_containers() -> dict:
     """
     Auto-discover all running containers, filter excluded ones.
-    Returns: dict mapping container_name to metadata:
-      {
-         "name1": {"id": "long_id", "priority": False},
-         ...
-      }
+    Writes discovered_containers.json (all non-excluded, for dashboard UI).
+    Reads targets.json (user whitelist) — if non-empty, manages ONLY those containers.
+    Returns: dict mapping container_name -> metadata.
     """
     self_hostname = socket.gethostname()
 
@@ -106,7 +104,7 @@ def discover_containers() -> dict:
         logger.error("Failed to connect to Docker daemon: %s", str(e))
         return {}
 
-    targets = {}
+    # --- Read shared state files ---
     priority_map = {}
     try:
         if os.path.exists("/app/priority_map.json"):
@@ -116,6 +114,21 @@ def discover_containers() -> dict:
     except Exception as e:
         logger.error("Failed to read priority_map.json: %s", str(e))
 
+    targets_whitelist = []
+    try:
+        if os.path.exists("/app/targets.json"):
+            import json
+            with open("/app/targets.json", "r") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    targets_whitelist = data
+    except Exception as e:
+        logger.error("Failed to read targets.json: %s", str(e))
+
+    # --- Discover all non-excluded containers (full universe) ---
+    all_discovered = {}  # Written to discovered_containers.json for the dashboard UI
+    targets = {}         # Final filtered result for HECF engine
+
     for c in running:
         name = c.name
         if self_hostname in c.id:
@@ -123,7 +136,7 @@ def discover_containers() -> dict:
         if name in EXCLUDED_CONTAINERS:
             logger.debug("Skipping excluded container: %s", name)
             continue
-            
+
         mapped_prio = priority_map.get(name)
         if mapped_prio:
             priority = mapped_prio == "high"
@@ -146,11 +159,50 @@ def discover_containers() -> dict:
                     )
                     break
 
-        targets[name] = {
+        meta = {
             "id": c.id,
             "priority": priority,
-            "pid": c.attrs.get("State", {}).get("Pid") if hasattr(c, 'attrs') else None
+            "pid": c.attrs.get("State", {}).get("Pid") if hasattr(c, 'attrs') else None,
+            "image": (c.image.tags[0] if c.image and c.image.tags else "unknown"),
+            "status": c.status,
         }
+        all_discovered[name] = meta
 
-    logger.info("Discovered %d target container(s)", len(targets))
+    # --- Write discovered_containers.json for dashboard UI ---
+    try:
+        import json
+        discovered_path = "/app/discovered_containers.json"
+        discovered_snapshot = {
+            name: {
+                "image": m["image"],
+                "status": m["status"],
+                "priority": "high" if m["priority"] else "low",
+            }
+            for name, m in all_discovered.items()
+        }
+        with open(discovered_path, "w") as f:
+            json.dump(discovered_snapshot, f, indent=2)
+    except Exception as e:
+        logger.warning("Could not write discovered_containers.json: %s", e)
+
+    # --- Apply whitelist filter ---
+    if targets_whitelist:
+        # Whitelist mode: only manage containers explicitly added by user
+        for name in targets_whitelist:
+            if name in all_discovered:
+                targets[name] = all_discovered[name]
+            else:
+                logger.warning("[TARGETS] '%s' in targets.json but not running — skipping", name)
+        logger.info(
+            "Whitelist mode: managing %d/%d containers (targets.json has %d entries)",
+            len(targets), len(all_discovered), len(targets_whitelist)
+        )
+    else:
+        # Open mode: manage all discovered non-excluded containers
+        targets = all_discovered
+        logger.info(
+            "Open mode: managing all %d discovered containers (targets.json is empty)",
+            len(targets)
+        )
+
     return targets
