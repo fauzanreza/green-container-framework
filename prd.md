@@ -78,7 +78,9 @@ Full technical spec: `architecture.md` §3.
   - Cold-Start Fallback: forces **Tier 2 (Balanced)** until 30 samples collected
     (revised from 120 — at 30s polling, 120 samples = 60 min > 30-min run duration).
   - Container tagging: classifies containers as `priority` (never hard-capped) or
-    `non-priority` (safe to throttle first) via Docker labels.
+    `non-priority` (safe to throttle first). Managed dynamically via a `priority_map.json`
+    Shared State controlled by the Dashboard UI, allowing on-the-fly updates without 
+    container restart (falling back to static Docker labels if undefined).
   - **Host `/proc` Mount Verification:** validates at cold start that `/proc` is the
     host's (not the container's own) by cross-checking CPU count. Requires `pid: host`.
   - **Network-Infra Auto-Priority:** containers matching known proxy/DNS image patterns
@@ -311,8 +313,9 @@ All analysis at significance level α = 0.05:
 | 8 | I/O Bandwidth Isolation | `framework/security/io_limiter.py` | Writes `io.max` to cap per-container disk I/O bandwidth. Outside 5 tracked metrics. |
 | 9 | Network Bandwidth Isolation | `framework/security/net_limiter.py` | Uses `tc` to cap per-container egress bandwidth. Outside 5 tracked metrics. |
 | 10 | Process Bomb Protection | `framework/security/pids_limiter.py` | Writes `pids.max` per non-priority container at cold start. Prevents fork-bomb DoS. |
+| 11 | Zombie Healer (Auto-Recovery) | `framework/security/zombie_healer.py` | Detects silent OOM crashes and Event Loop deadlocks via TCP/cgroups polling, automatically restarting the container. |
 
-All modules (#1–10) are unit-tested in `tests/test_security.py` and enabled via
+All modules (#1–11) are unit-tested in `tests/test_security.py` and enabled via
 `SECURITY_ENABLED = True` in `framework/config.py`.
 
 ---

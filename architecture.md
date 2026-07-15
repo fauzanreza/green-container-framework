@@ -84,8 +84,10 @@ Runs at cold start to build a complete hardware and environment profile of the h
     from the Guardrail, to avoid data corruption from starved I/O.
   - `non-priority` — e.g. stateless web front-ends / static-file servers. Safe to
     throttle first and more aggressively under load.
-  - Implementation: Docker container labels (e.g. `hecf.priority=high|low`), read
-    once at Layer 1 init and cached for Layer 4.
+  - Implementation: **Dynamic Shared State** via `priority_map.json` (mounted as a 
+    Docker volume from the Dashboard UI), allowing on-the-fly priority changes without 
+    container restarts. Falls back to static Docker labels (`hecf.priority=high|low`) 
+    if not defined in the JSON.
 - **Host `/proc` Mount Verification:** cross-checks `/proc/cpuinfo` CPU count
   against `os.cpu_count()` to confirm the host's `/proc` is mounted (not the
   container's own). Requires `pid: host` in `docker-compose.yml`.
@@ -480,6 +482,7 @@ required by proposal §4.4.1.
 | 8 | I/O Bandwidth Isolation | `framework/security/io_limiter.py` | Layer 4 | Writes `io.max` in cgroupfs to cap per-container disk I/O bandwidth. Prevents I/O monopolization. Outside 5 tracked metrics — hardening only. |
 | 9 | Network Bandwidth Isolation | `framework/security/net_limiter.py` | Layer 4 | Uses `tc` (traffic control) `htb` qdisc to cap per-container egress bandwidth. Prevents bandwidth starvation. Outside 5 tracked metrics. |
 | 10 | Process Bomb Protection | `framework/security/pids_limiter.py` | Layer 1 | Writes `pids.max` per non-priority container at cold start. Prevents fork-bomb or thread-leak DoS. Pattern identical to `privilege_guard.py`. |
+| 11 | Zombie Healer (Auto-Recovery) | `framework/security/zombie_healer.py` | Layer 4 | Reads cgroups `memory.events` and kernel TCP backlog (`/proc/pid/net/tcp`) to detect silent OOM crashes or Event Loop deadlocks, automatically triggering a container restart. |
 
 ### A.2 Why Hidden?
 
@@ -494,11 +497,12 @@ required by proposal §4.4.1.
 
 ### A.3 How to Activate / Demonstrate
 
-All safenet features (#1–10) are **enabled by default** via `framework/config.py`:
+All safenet features (#1–11) are **enabled by default** via `framework/config.py`:
 ```python
-SECURITY_ENABLED = True       # Controls #1-5 (existing) + #6-10 (new):
+SECURITY_ENABLED = True       # Controls #1-5 (existing) + #6-11 (new):
                                #   watchdog_thaw, duty_cycle_freezer,
-                               #   io_limiter, net_limiter, pids_limiter
+                               #   io_limiter, net_limiter, pids_limiter,
+                               #   zombie_healer
 MICRO_FREEZE_ENABLED = True   # Controls micro_freezer, tcp_backlog_manager
 ```
 
