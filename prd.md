@@ -81,6 +81,15 @@ Full technical spec: `architecture.md` §3.
     `non-priority` (safe to throttle first). Managed dynamically via a `priority_map.json`
     Shared State controlled by the Dashboard UI, allowing on-the-fly updates without 
     container restart (falling back to static Docker labels if undefined).
+  - **Dynamic Target Management:** Layer 1 supports a UI-controlled **whitelist scope model**
+    via `targets.json` (shared Docker volume, written by dashboard, read by engine):
+    - **Whitelist mode**: `targets.json` contains a non-empty list of container names →
+      HECF monitors and shapes **only those containers**. All other containers are fully ignored.
+    - **Open mode** (default): `targets.json` is empty (`[]`) → HECF manages all
+      non-excluded containers (backward-compatible).
+    - Every polling cycle, the engine writes `discovered_containers.json` — a snapshot of
+      all discoverable containers — which the Dashboard reads to populate the "Managed
+      Containers" UI panel. No restart required to change scope.
   - **Host `/proc` Mount Verification:** validates at cold start that `/proc` is the
     host's (not the container's own) by cross-checking CPU count. Requires `pid: host`.
   - **Network-Infra Auto-Priority:** containers matching known proxy/DNS image patterns
@@ -165,11 +174,20 @@ total server capacity. Required to validate Hypothesis H2 and answer RQ1.
 
 #### 4.4 Real-time Metrics Dashboard
 
-- Lightweight Flask server (port 8092).
+- **Production-grade Gunicorn server** (2 workers × 4 threads, port 8092) — replaces
+  the Flask dev server to handle concurrent browser/API requests without blocking,
+  preventing HTTP 524 gateway timeouts that the single-threaded dev server caused.
 - Visualizes exactly the **5 evaluation metrics** defined in §9.
 - No historical database; live aggregation from `metrics.csv` only.
 - Container action states visible in the tracking table (e.g., MICRO_FREEZE,
   GUARDRAIL, AGGRESSIVE, BALANCED, SOFT).
+- **Managed Containers Panel**: card-based UI panel for controlling HECF's optimization
+  scope at runtime:
+  - Reads `discovered_containers.json` (written by HECF engine) to list all available containers.
+  - Green cards = in the managed whitelist (`targets.json`). Click to **remove** from HECF scope.
+  - Grey cards = available but unmanaged. Click to **add** to HECF scope.
+  - Mode badge: ⚡ All Containers (open mode) or ✅ Whitelist (N selected).
+  - Changes take effect within one polling cycle (≤30s), with no restart.
 
 #### 4.5 Operation Modes for Baseline Comparison
 
@@ -341,3 +359,4 @@ unreliable behind cloud NAT, (3) checkpoint/restore takes 1–3s vs <1ms thaw,
 | 1 | No active health-check proxy in front of non-priority containers. Freeze cycle 500–1000ms can trigger flapping with health-check intervals < 1s. | Tag such containers `hecf.priority=high` to exempt from freezing. Experimental setup uses direct Locust→container traffic only. |
 | 2 | Single-host, no container migration (§11). | By design — targets environments where orchestrator overhead exceeds savings. |
 | 3 | cgroups v2 unified hierarchy required (kernel ≥5.10). | Hard requirement documented in §2 and §5. |
+| 4 | Micro-Freeze thaw without eBPF is polling-based (10–30s). Production apps may see up to 30s cold response on first post-idle request. | Use the Dashboard "Managed Containers" panel — add only experiment/benchmark containers (`bench-json`) to the whitelist. Never add live production apps unless eBPF is available on the host. |
