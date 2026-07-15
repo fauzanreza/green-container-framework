@@ -180,8 +180,9 @@ def _init_security(host_profile: dict):
         components["net_limiter"] = NetLimiter(dry_run=DRY_RUN)
 
         # #10: PID Limiter
-        from .security.pids_limiter import PidsLimiter
-        components["pids_limiter"] = PidsLimiter(dry_run=DRY_RUN)
+        # #11: Zombie Healer (Auto-Recovery)
+        from .security.zombie_healer import ZombieHealer
+        components["zombie_healer"] = ZombieHealer(dry_run=DRY_RUN)
 
     return components
 
@@ -269,8 +270,21 @@ def main():
         for name, meta in targets_meta.items():
             cid = meta["id"]
             priority = meta["priority"]
+            pid = meta.get("pid")
             seen_containers.add(name)
             seen_container_ids.add(cid)
+
+            # === Security Layer: Zombie Healer (if enabled) ===
+            healed = False
+            if "zombie_healer" in security:
+                heal_result = security["zombie_healer"].evaluate(name, cid, priority, pid)
+                if heal_result["action"] == "heal":
+                    security["zombie_healer"].heal(name, cid)
+                    healed = True
+                    # Skip normal shaping if we just healed it
+                    
+            if healed:
+                continue
 
             # Layer 2: Monitor
             stats = monitor.get_stats(name, cid)
@@ -456,10 +470,10 @@ def main():
         predictor.cleanup(seen_containers)
 
         # Security cleanup
-        for key in ("ddos_filter", "edos_guard", "sandbox"):
+        for key in ("ddos_filter", "edos_guard", "sandbox", "zombie_healer"):
             if key in security:
                 security[key].cleanup(
-                    seen_container_ids if key == "sandbox" else seen_containers
+                    seen_container_ids if key in ("sandbox", "zombie_healer") else seen_containers
                 )
         if "micro_freezer" in security:
             security["micro_freezer"].cleanup(seen_container_ids)

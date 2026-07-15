@@ -148,7 +148,8 @@ def discover_containers() -> dict:
 
         targets[name] = {
             "id": c.id,
-            "priority": priority
+            "priority": priority,
+            "pid": c.attrs.get("State", {}).get("Pid") if hasattr(c, 'attrs') else None
         }
 
     logger.info("Discovered %d target container(s)", len(targets))
