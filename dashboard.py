@@ -568,6 +568,7 @@ HTML_TEMPLATE = """
                         <th>Container (Target)</th>
                         <th>L2: CPU %</th>
                         <th>L2: MEM %</th>
+                        <th>Priority</th>
                         <th>L3B: Tier Class</th>
                         <th>L3C: EMA Pred.</th>
                         <th>L4: Shaper Action</th>
@@ -778,6 +779,12 @@ async function fetchMetrics() {
         const tbody = document.getElementById('container-table-body');
         const containers = Object.values(latest);
 
+        let priorityMap = {};
+        try {
+            const pres = await fetch('/api/priorities');
+            priorityMap = await pres.json();
+        } catch(e) {}
+
         let activeFreezes = 0;
         containers.forEach(c => {
             const act = (c.action||'').toUpperCase();
@@ -797,10 +804,18 @@ async function fetchMetrics() {
             const ema = parseFloat(c.ema_pred||0).toFixed(1);
             const alpha = parseFloat(c.alpha||0).toFixed(2);
             const pw = parseFloat(c.power_watt||0).toFixed(1);
+            const prio = priorityMap[c.container_name] || 'low';
+
             tbody.innerHTML += `<tr>
                 <td><strong>${c.container_name}</strong></td>
                 <td>${cpu}%</td>
                 <td>${mem}%</td>
+                <td>
+                    <select class="form-select form-select-sm" style="width: 80px; font-size: 11px;" onchange="updatePriority('${c.container_name}', this.value)">
+                        <option value="low" ${prio==='low'?'selected':''}>Low</option>
+                        <option value="high" ${prio==='high'?'selected':''}>High</option>
+                    </select>
+                </td>
                 <td><span class="badge-tier ${tierClass}">${tier}</span></td>
                 <td>${ema}% <small class="text-muted">(α=${alpha})</small></td>
                 <td><span class="badge-action ${actClass}">${action}</span></td>
@@ -809,6 +824,17 @@ async function fetchMetrics() {
         });
     } catch(e) { console.error('fetch error:', e); }
 }
+
+window.updatePriority = async function(container, priority) {
+    try {
+        await fetch('/api/priorities', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({container, priority})
+        });
+        fetchMetrics();
+    } catch(e) { console.error('updatePriority error:', e); }
+};
 
 setInterval(fetchMetrics, 3000);
 fetchMetrics();
@@ -820,6 +846,7 @@ fetchMetrics();
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CSV_PATH = os.path.join(BASE_DIR, "metrics.csv")
 STATUS_PATH = os.path.join(BASE_DIR, "framework_status.json")
+PRIORITY_MAP_PATH = os.path.join(BASE_DIR, "priority_map.json")
 FIELDNAMES = ["time","container_name","cpu_percent","mem_percent","tier","action",
               "power_watt","energy_kwh","ema_pred","alpha","spike_ratio","p50","p95",
               "overhead_cpu","overhead_mem"]
@@ -860,6 +887,38 @@ def toggle_status():
     with open(STATUS_PATH, "w") as f:
         json.dump({"active": req.get("active", True)}, f)
     return jsonify({"status": "ok"})
+
+@app.route("/api/priorities")
+def get_priorities():
+    if os.path.isfile(PRIORITY_MAP_PATH):
+        try:
+            with open(PRIORITY_MAP_PATH) as f:
+                return jsonify(json.load(f))
+        except:
+            pass
+    return jsonify({})
+
+@app.route("/api/priorities", methods=["POST"])
+def set_priority():
+    req = request.json
+    container = req.get("container")
+    priority = req.get("priority")
+    
+    current_map = {}
+    if os.path.isfile(PRIORITY_MAP_PATH):
+        try:
+            with open(PRIORITY_MAP_PATH) as f:
+                current_map = json.load(f)
+        except:
+            pass
+            
+    if container:
+        current_map[container] = priority
+        with open(PRIORITY_MAP_PATH, "w") as f:
+            json.dump(current_map, f, indent=2)
+            
+    return jsonify({"status": "ok", "map": current_map})
+
 
 
 _last_cpu_stat = {}

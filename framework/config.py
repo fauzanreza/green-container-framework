@@ -98,7 +98,11 @@ ENCRYPTION_MODE          = os.getenv("HECF_ENCRYPTION_MODE", "none")
 EXCLUDED_CONTAINERS = [
     "hecf",
     "hecf-dashboard",
-    "locust"
+    "locust",
+    "cloudflared-tunnel",
+    "cloudflared",
+    "tailscale",
+    "tailscaled"
 ]
 
 # === Network-Infra Auto-Priority Patterns (Gap #15) ===

@@ -12,6 +12,7 @@ services:
       - /proc/meminfo:/proc/meminfo:ro
       - ./metrics.csv:/app/metrics.csv
       - ./framework_status.json:/app/framework_status.json
+      - ./priority_map.json:/app/priority_map.json
     environment:
       - HECF_TARGETS=""
       - HECF_MODE=full_hecf
@@ -28,6 +29,7 @@ services:
     volumes:
       - ./metrics.csv:/app/metrics.csv:ro
       - ./framework_status.json:/app/framework_status.json
+      - ./priority_map.json:/app/priority_map.json
       - /proc/cpuinfo:/proc/cpuinfo:ro
       - /proc/meminfo:/proc/meminfo:ro
     restart: unless-stopped

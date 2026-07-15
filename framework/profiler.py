@@ -107,6 +107,15 @@ def discover_containers() -> dict:
         return {}
 
     targets = {}
+    priority_map = {}
+    try:
+        if os.path.exists("/app/priority_map.json"):
+            import json
+            with open("/app/priority_map.json", "r") as f:
+                priority_map = json.load(f)
+    except Exception as e:
+        logger.error("Failed to read priority_map.json: %s", str(e))
+
     for c in running:
         name = c.name
         if self_hostname in c.id:
@@ -115,7 +124,11 @@ def discover_containers() -> dict:
             logger.debug("Skipping excluded container: %s", name)
             continue
             
-        priority = c.labels.get("hecf.priority") == "high"
+        mapped_prio = priority_map.get(name)
+        if mapped_prio:
+            priority = mapped_prio == "high"
+        else:
+            priority = c.labels.get("hecf.priority") == "high"
 
         # === Network-Infra Auto-Priority (Gap #15) ===
         if not priority:
