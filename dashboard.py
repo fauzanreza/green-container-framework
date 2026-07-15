@@ -283,67 +283,73 @@ HTML_TEMPLATE = """
         }
         .mode-all { background: #fef3c7; color: #92400e; }
         .mode-whitelist { background: #dcfce7; color: #15803d; }
-        .container-cards {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-            padding: 16px 20px;
+        .btn-add-container {
+            background: var(--primary);
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            padding: 7px 16px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s;
+            font-family: inherit;
         }
-        .c-card {
+        .btn-add-container:hover { background: #1447b5; }
+        /* Managed chip */
+        .m-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: #f0fdf4;
+            border: 1.5px solid #86efac;
+            color: #15803d;
+            border-radius: 20px;
+            padding: 5px 10px 5px 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .m-chip .rm-btn {
+            background: none;
+            border: none;
+            cursor: pointer;
+            color: #dc2626;
+            font-size: 14px;
+            line-height: 1;
+            padding: 0 2px;
+            border-radius: 50%;
+            transition: background 0.15s;
+        }
+        .m-chip .rm-btn:hover { background: #fee2e2; }
+        /* Modal list item */
+        .modal-item {
             display: flex;
             align-items: center;
-            gap: 8px;
-            padding: 7px 12px;
-            border-radius: 10px;
-            border: 1.5px solid;
-            font-size: 12px;
-            font-weight: 500;
+            justify-content: space-between;
+            padding: 9px 12px;
+            border-radius: 8px;
+            margin-bottom: 4px;
             cursor: pointer;
-            transition: all 0.18s;
-            user-select: none;
+            transition: background 0.15s;
+            border: 1.5px solid transparent;
         }
-        .c-card.managed {
-            background: #f0fdf4;
-            border-color: #86efac;
-            color: #15803d;
-        }
-        .c-card.managed:hover {
-            background: #fee2e2;
-            border-color: #fca5a5;
-            color: #dc2626;
-        }
-        .c-card.available {
-            background: #f8fafc;
-            border-color: #e2e8f0;
-            color: #475569;
-        }
-        .c-card.available:hover {
-            background: #f0fdf4;
-            border-color: #86efac;
-            color: #15803d;
-        }
-        .c-card .c-dot {
-            width: 7px; height: 7px;
-            border-radius: 50%;
-            flex-shrink: 0;
-        }
-        .c-card.managed .c-dot { background: #22c55e; }
-        .c-card.available .c-dot { background: #94a3b8; }
-        .c-card .c-icon { font-size: 13px; }
-        .c-divider {
-            padding: 4px 20px 0;
+        .modal-item:hover { background: #f0fdf4; border-color: #86efac; }
+        .modal-item.is-managed { background: #f0fdf4; border-color: #86efac; cursor: default; }
+        .modal-item .mi-name { font-size: 13px; font-weight: 600; color: var(--text); }
+        .modal-item .mi-img { font-size: 11px; color: var(--text-muted); margin-top:1px; }
+        .modal-item .mi-btn {
             font-size: 11px;
-            font-weight: 600;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 0.6px;
+            font-weight: 700;
+            padding: 4px 12px;
+            border-radius: 6px;
+            border: none;
+            cursor: pointer;
+            font-family: inherit;
         }
-        .c-empty {
-            color: var(--text-muted);
-            font-size: 12px;
-            font-style: italic;
-            padding: 4px 0;
-        }
+        .modal-item .mi-btn.add { background: #dcfce7; color: #15803d; }
+        .modal-item .mi-btn.add:hover { background: #22c55e; color: #fff; }
+        .modal-item .mi-btn.remove { background: #fee2e2; color: #dc2626; }
+        .modal-item .mi-btn.remove:hover { background: #dc2626; color: #fff; }
         .custom-legend {
             display: flex;
             flex-wrap: wrap;
@@ -641,23 +647,58 @@ HTML_TEMPLATE = """
         <div class="panel-header">
             <div class="d-flex align-items-center gap-3">
                 <h6 style="margin:0;">🎯 HECF Managed Containers</h6>
-                <span class="target-mode-badge mode-all" id="target-mode-badge">⚡ All Containers</span>
+                <span class="target-mode-badge mode-all" id="target-mode-badge">⚡ All Containers (no filter)</span>
             </div>
-            <span style="font-size:12px;color:var(--text-muted);">Click to add/remove from HECF optimization scope</span>
+            <button class="btn-add-container" onclick="openAddModal()" id="btn-add-container">
+                + Add Container
+            </button>
         </div>
-        <div id="managed-section">
-            <div class="c-divider">✅ Managed by HECF (click to remove)</div>
-            <div class="container-cards" id="managed-cards">
-                <span class="c-empty">Loading…</span>
+        <!-- Managed chips -->
+        <div style="padding: 14px 20px 6px;">
+            <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.6px;margin-bottom:10px;">✅ Managed by HECF</div>
+            <div id="managed-chips" style="display:flex;flex-wrap:wrap;gap:8px;min-height:36px;align-items:center;">
+                <span style="color:var(--text-muted);font-size:12px;font-style:italic;">Loading…</span>
             </div>
         </div>
-        <div style="border-top: 1px dashed var(--border);" id="available-section">
-            <div class="c-divider">○ Available (not managed, click to add)</div>
-            <div class="container-cards" id="available-cards">
-                <span class="c-empty">Loading…</span>
+        <div style="padding:0 20px 16px;">
+            <p style="font-size:11px;color:var(--text-muted);margin:8px 0 0;" id="target-hint"></p>
+        </div>
+    </div>
+
+    <!-- Add Container Modal -->
+    <div id="add-modal-overlay" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,0.5);z-index:1000;align-items:center;justify-content:center;">
+        <div style="background:#fff;border-radius:16px;width:520px;max-width:95vw;box-shadow:0 20px 60px rgba(0,0,0,0.2);overflow:hidden;">
+            <div style="padding:20px 24px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
+                <div>
+                    <div style="font-size:15px;font-weight:700;color:var(--text);">Add Container to HECF</div>
+                    <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">Select containers to optimize, or type a name manually</div>
+                </div>
+                <button onclick="closeAddModal()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text-muted);line-height:1;padding:4px;">&times;</button>
+            </div>
+            <!-- Search -->
+            <div style="padding:16px 24px 8px;">
+                <input type="text" id="modal-search" placeholder="🔍  Search container name…"
+                    oninput="filterModalList()"
+                    style="width:100%;padding:9px 14px;border:1.5px solid var(--border);border-radius:10px;font-size:13px;outline:none;font-family:inherit;">
+            </div>
+            <!-- Container list -->
+            <div id="modal-list" style="max-height:280px;overflow-y:auto;padding:4px 24px 8px;"></div>
+            <!-- Manual input -->
+            <div style="padding:12px 24px;border-top:1px dashed var(--border);">
+                <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.6px;margin-bottom:8px;">Or type a container name manually</div>
+                <div style="display:flex;gap:8px;">
+                    <input type="text" id="manual-container-input" placeholder="e.g. bench-json"
+                        style="flex:1;padding:8px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;outline:none;font-family:inherit;"
+                        onkeydown="if(event.key==='Enter') addManualContainer()">
+                    <button onclick="addManualContainer()" style="background:var(--primary);color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:12px;font-weight:600;cursor:pointer;">Add</button>
+                </div>
+            </div>
+            <div style="padding:12px 24px 20px;text-align:right;border-top:1px solid var(--border);">
+                <button onclick="closeAddModal()" style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 18px;font-size:13px;cursor:pointer;font-family:inherit;">Done</button>
             </div>
         </div>
     </div>
+
 
     <!-- Container Table -->
     <div class="panel">
@@ -882,6 +923,7 @@ async function fetchMetrics() {
 
         const tbody = document.getElementById('container-table-body');
         const containers = Object.values(latest);
+        syncDiscoveredFromMetrics(containers);  // fallback: keep modal populated even without discovered.json
 
         let priorityMap = {};
         try {
@@ -944,6 +986,8 @@ setInterval(fetchMetrics, 3000);
 fetchMetrics();
 
 // === Managed Containers Panel ===
+let _allDiscovered = {};  // cached universe from discovered.json or metrics fallback
+
 async function fetchTargets() {
     try {
         const res = await fetch('/api/targets');
@@ -952,64 +996,140 @@ async function fetchTargets() {
         const discovered = data.discovered || {};
         const isWhitelist = data.mode === 'whitelist';
 
+        // Use discovered.json if available, else keep the metrics-based fallback
+        if (Object.keys(discovered).length > 0) _allDiscovered = discovered;
+
         // Update mode badge
         const badge = document.getElementById('target-mode-badge');
         if (isWhitelist) {
             badge.className = 'target-mode-badge mode-whitelist';
-            badge.textContent = `✅ Whitelist (${managed.length} selected)`;
+            badge.textContent = `✅ Whitelist (${managed.length} containers)`;
         } else {
             badge.className = 'target-mode-badge mode-all';
             badge.textContent = '⚡ All Containers (no filter)';
         }
 
-        // Split containers into managed vs available
-        const managedSet = new Set(managed);
-        let managedHtml = '';
-        let availableHtml = '';
-
-        // Managed cards first
-        managed.forEach(name => {
-            const info = discovered[name] || {};
-            const img = info.image ? info.image.split('/').pop().split(':')[0] : name;
-            managedHtml += `<div class="c-card managed" onclick="toggleTarget('${name}', 'remove')" title="Click to remove from HECF">
-                <span class="c-dot"></span>
-                <span>${name}</span>
-                <span class="c-icon" style="opacity:0.5;font-size:11px;">✕</span>
-            </div>`;
-        });
-
-        // Available cards
-        Object.entries(discovered).forEach(([name, info]) => {
-            if (!managedSet.has(name)) {
-                availableHtml += `<div class="c-card available" onclick="toggleTarget('${name}', 'add')" title="Click to add to HECF">
-                    <span class="c-dot"></span>
-                    <span>${name}</span>
-                    <span class="c-icon">+</span>
-                </div>`;
-            }
-        });
-
-        document.getElementById('managed-cards').innerHTML =
-            managedHtml || '<span class="c-empty">None selected — HECF managing ALL containers</span>';
-        document.getElementById('available-cards').innerHTML =
-            availableHtml || '<span class="c-empty">All containers are managed</span>';
-
-        // Hide available section if in "all" mode and nothing excluded
-        document.getElementById('available-section').style.display =
-            (!isWhitelist && Object.keys(discovered).length === 0) ? 'none' : 'block';
-
+        // Render managed chips
+        const chipsEl = document.getElementById('managed-chips');
+        const hintEl  = document.getElementById('target-hint');
+        if (managed.length === 0) {
+            chipsEl.innerHTML = `<span style="color:var(--text-muted);font-size:12px;font-style:italic;">
+                No filter active — HECF managing ALL discovered containers.
+                Click <strong>+ Add Container</strong> to whitelist specific ones.
+            </span>`;
+            hintEl.innerHTML = '';
+        } else {
+            chipsEl.innerHTML = managed.map(name => `
+                <span class="m-chip">
+                    <span>📦 ${name}</span>
+                    <button class="rm-btn" onclick="removeTarget('${name}')" title="Remove from HECF">✕</button>
+                </span>`).join('');
+            hintEl.innerHTML = `<span style="color:#15803d;">✓ HECF only optimizes the ${managed.length} container(s) above.</span>
+                <a href="#" onclick="clearAllTargets();return false;" style="color:var(--danger);margin-left:12px;font-size:11px;">Clear all (manage everything)</a>`;
+        }
     } catch(e) { console.error('fetchTargets error:', e); }
 }
 
-window.toggleTarget = async function(container, action) {
+// Populate _allDiscovered from metrics data (runs after fetchMetrics populates 'latest')
+function syncDiscoveredFromMetrics(containers) {
+    containers.forEach(c => {
+        if (!_allDiscovered[c.container_name]) {
+            _allDiscovered[c.container_name] = { image: 'running', status: 'running', priority: 'low' };
+        }
+    });
+}
+
+// --- Modal ---
+let _modalManaged = [];
+
+window.openAddModal = async function() {
+    const overlay = document.getElementById('add-modal-overlay');
+    overlay.style.display = 'flex';
+    document.getElementById('modal-search').value = '';
+    document.getElementById('manual-container-input').value = '';
     try {
-        await fetch('/api/targets', {
-            method: 'POST',
-            headers: {'Content-Type':'application/json'},
+        const r = await fetch('/api/targets');
+        const d = await r.json();
+        _modalManaged = d.managed || [];
+        if (Object.keys(d.discovered || {}).length > 0) _allDiscovered = d.discovered;
+    } catch(e) { _modalManaged = []; }
+    renderModalList('');
+    setTimeout(() => document.getElementById('modal-search').focus(), 80);
+};
+
+window.closeAddModal = function() {
+    document.getElementById('add-modal-overlay').style.display = 'none';
+    fetchTargets();
+};
+document.getElementById('add-modal-overlay').addEventListener('click', function(e) {
+    if (e.target === this) closeAddModal();
+});
+
+function renderModalList(filter) {
+    const list = document.getElementById('modal-list');
+    const managedSet = new Set(_modalManaged);
+    const all = Object.keys(_allDiscovered).filter(n => !filter || n.toLowerCase().includes(filter.toLowerCase()));
+    if (all.length === 0) {
+        list.innerHTML = `<div style="text-align:center;padding:24px;color:var(--text-muted);font-size:13px;">
+            ${filter ? 'No containers match your search.' : 'No containers discovered yet.<br>Use the manual input below to add by name.'}
+        </div>`;
+        return;
+    }
+    list.innerHTML = all.map(name => {
+        const isMgd = managedSet.has(name);
+        const info = _allDiscovered[name] || {};
+        return `<div class="modal-item ${isMgd ? 'is-managed' : ''}">
+            <div>
+                <div class="mi-name">📦 ${name}</div>
+                <div class="mi-img">${info.image && info.image !== 'unknown' ? info.image : 'running container'}</div>
+            </div>
+            ${isMgd
+                ? `<button class="mi-btn remove" onclick="modalToggle('${name}','remove')">✕ Remove</button>`
+                : `<button class="mi-btn add"    onclick="modalToggle('${name}','add')">+ Add</button>`}
+        </div>`;
+    }).join('');
+}
+
+window.filterModalList = function() { renderModalList(document.getElementById('modal-search').value); };
+
+window.modalToggle = async function(container, action) {
+    try {
+        const r = await fetch('/api/targets', {
+            method:'POST', headers:{'Content-Type':'application/json'},
             body: JSON.stringify({container, action})
         });
+        const d = await r.json();
+        _modalManaged = d.managed || [];
+        renderModalList(document.getElementById('modal-search').value);
         fetchTargets();
-    } catch(e) { console.error('toggleTarget error:', e); }
+    } catch(e) { console.error('modalToggle error:', e); }
+};
+
+window.addManualContainer = async function() {
+    const input = document.getElementById('manual-container-input');
+    const name = input.value.trim();
+    if (!name) return;
+    await modalToggle(name, 'add');
+    input.value = '';
+};
+
+window.removeTarget = async function(container) {
+    await modalToggle(container, 'remove');
+};
+
+window.clearAllTargets = async function() {
+    if (!confirm('Remove all containers from whitelist? HECF will manage ALL containers again.')) return;
+    try {
+        const r = await fetch('/api/targets');
+        const d = await r.json();
+        for (const name of (d.managed || [])) {
+            await fetch('/api/targets', {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({container: name, action: 'remove'})
+            });
+        }
+        fetchTargets();
+    } catch(e) {}
 };
 
 setInterval(fetchTargets, 5000);
