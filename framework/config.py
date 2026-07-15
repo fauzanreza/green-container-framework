@@ -94,15 +94,49 @@ IMAGE_SIGNING_REQUIRED   = os.getenv("HECF_IMAGE_SIGNING_REQUIRED", "false").low
 # === Encryption Mode (Layer 3 ext, §10.4) ===
 ENCRYPTION_MODE          = os.getenv("HECF_ENCRYPTION_MODE", "none")
 
-# Excluded critical infrastructure (HECF itself, logging, DBs if not tagged properly)
+# === Excluded Containers ===
+# RULE: Anything NOT in this list AND NOT targeted via HECF_TARGETS can be shaped.
+# By default, exclude HECF itself, infrastructure, databases, and ALL production apps.
+# In production: set HECF_TARGETS=bench-json (or your test container only).
 EXCLUDED_CONTAINERS = [
+    # HECF itself
     "hecf",
     "hecf-dashboard",
+    # Load testing (observer only)
     "locust",
-    "cloudflared-tunnel",
+    "locust-master",
+    "locust-worker",
+    # Network tunnel & VPN — NEVER throttle, causes 524
     "cloudflared",
+    "cloudflared-tunnel",
     "tailscale",
-    "tailscaled"
+    "tailscaled",
+    # Reverse proxies — handled by NETWORK_INFRA_PATTERNS auto-priority
+    "nginx-signature",
+    "nginx-siperah",
+    "nginx-musicahub",
+    "nginx-quran-horizon",
+    "nginx-wedding-invite",
+    "nginx-time-saver",
+    "nginx-shopyvibe",
+    # Production application containers — NEVER freeze these
+    "portfolio-web",
+    "app-signature",
+    "siperah-app",
+    "musicahub-app",
+    "quran-horizon-app",
+    "wedding-2d-invite-app",
+    "time-saver-app",
+    "shopyvibe-app",
+    # Databases — NEVER touch
+    "mysql-db",
+    "postgres",
+    "redis",
+    # Monitoring & AI agents
+    "beszel-hub",
+    "beszel-agent",
+    "ollama",
+    "aeris-agent",
 ]
 
 # === Network-Infra Auto-Priority Patterns (Gap #15) ===
