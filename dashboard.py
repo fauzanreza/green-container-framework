@@ -1078,10 +1078,15 @@ function renderModalList(filter) {
     list.innerHTML = all.map(name => {
         const isMgd = managedSet.has(name);
         const info = _allDiscovered[name] || {};
+        const imgLabel = info.image && info.image !== 'unknown' ? info.image : 'running container';
+        const portLabel = info.ports && info.ports.length ? `Ports: ${info.ports.join(', ')}` : '';
+        const autoReason = info.auto_reason ? `🔒 Auto-protected: ${info.auto_reason}` : '';
+        const subLabel = [imgLabel, portLabel, autoReason].filter(Boolean).join(' · ');
+        const isAutoHigh = info.priority === 'high';
         return `<div class="modal-item ${isMgd ? 'is-managed' : ''}">
             <div>
-                <div class="mi-name">📦 ${name}</div>
-                <div class="mi-img">${info.image && info.image !== 'unknown' ? info.image : 'running container'}</div>
+                <div class="mi-name">${isAutoHigh ? '🛡️' : '📦'} ${name}</div>
+                <div class="mi-img">${subLabel}</div>
             </div>
             ${isMgd
                 ? `<button class="mi-btn remove" onclick="modalToggle('${name}','remove')">✕ Remove</button>`

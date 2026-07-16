@@ -94,52 +94,66 @@ IMAGE_SIGNING_REQUIRED   = os.getenv("HECF_IMAGE_SIGNING_REQUIRED", "false").low
 # === Encryption Mode (Layer 3 ext, §10.4) ===
 ENCRYPTION_MODE          = os.getenv("HECF_ENCRYPTION_MODE", "none")
 
-# === Excluded Containers ===
-# RULE: Anything NOT in this list AND NOT targeted via HECF_TARGETS can be shaped.
-# By default, exclude HECF itself, infrastructure, databases, and ALL production apps.
-# In production: set HECF_TARGETS=bench-json (or your test container only).
+# === Excluded Containers (Hardcoded — NEVER managed by HECF on any server) ===
+# RULE: Keep this list MINIMAL and UNIVERSAL.
+# Do NOT add app-specific container names here — use targets.json (UI) for that.
+# This list is the last line of defense that cannot be overridden by the UI.
 EXCLUDED_CONTAINERS = [
-    # HECF itself
+    # HECF itself — managing itself would cause a control loop
     "hecf",
     "hecf-dashboard",
-    # Load testing (observer only)
-    "locust",
-    "locust-master",
-    "locust-worker",
-    # Network tunnel & VPN — NEVER throttle, causes 524
+    # Network tunnels & VPN — freezing these kills ALL external access (causes 524)
     "cloudflared",
     "cloudflared-tunnel",
     "tailscale",
     "tailscaled",
-    # Reverse proxies — handled by NETWORK_INFRA_PATTERNS auto-priority
-    "nginx-signature",
-    "nginx-siperah",
-    "nginx-musicahub",
-    "nginx-quran-horizon",
-    "nginx-wedding-invite",
-    "nginx-time-saver",
-    "nginx-shopyvibe",
-    # Production application containers — NEVER freeze these
-    "portfolio-web",
-    "app-signature",
-    "siperah-app",
-    "musicahub-app",
-    "quran-horizon-app",
-    "wedding-2d-invite-app",
-    "time-saver-app",
-    "shopyvibe-app",
-    # Databases — NEVER touch
-    "mysql-db",
-    "postgres",
-    "redis",
-    # Monitoring & AI agents
-    "beszel-hub",
-    "beszel-agent",
-    "ollama",
-    "aeris-agent",
+    "wireguard",
 ]
 
-# === Network-Infra Auto-Priority Patterns (Gap #15) ===
+# === Critical Port Auto-Exclusion (Runtime Detection in profiler.py) ===
+# If a running container BINDS one of these ports (internal container port),
+# it is automatically EXCLUDED from HECF management — no user override possible.
+# Rationale: these services crash or corrupt data if CPU/memory is throttled.
+CRITICAL_PORTS_EXCLUDE = {
+    # --- Databases (data corruption risk under throttling) ---
+    3306:  "MySQL / MariaDB",
+    5432:  "PostgreSQL",
+    6379:  "Redis",
+    27017: "MongoDB",
+    27018: "MongoDB (shard)",
+    5984:  "CouchDB",
+    9200:  "Elasticsearch HTTP",
+    9300:  "Elasticsearch cluster",
+    5672:  "RabbitMQ AMQP",
+    15672: "RabbitMQ Management",
+    2181:  "ZooKeeper",
+    # --- Container runtime / orchestration API ---
+    2376:  "Docker TLS API",
+    2377:  "Docker Swarm manager",
+    # --- SSH / Remote management ---
+    22:    "SSH",
+    2222:  "SSH alternate",
+    2206:  "SSH alternate",
+    # --- VPN / Overlay networks ---
+    1194:  "OpenVPN",
+    51820: "WireGuard",
+    500:   "IKEv2 / IPSec",
+}
+
+# === Critical Port Auto-Priority (Runtime Detection in profiler.py) ===
+# If a running container BINDS one of these ports, it is auto-tagged priority=high
+# (protected from hard caps & freezing) but still VISIBLE in the UI Managed panel.
+# The user CAN add it to the whitelist, but it will never be frozen.
+CRITICAL_PORTS_PRIORITY = {
+    80:   "HTTP",
+    443:  "HTTPS",
+    8080: "HTTP alternate",
+    8443: "HTTPS alternate",
+    53:   "DNS",
+    123:  "NTP",
+}
+
+# === Network-Infra Auto-Priority Patterns (image/name matching, Gap #15) ===
 NETWORK_INFRA_PATTERNS   = ["nginx", "caddy", "traefik", "cloudflared",
                             "coredns", "haproxy", "envoy"]
 

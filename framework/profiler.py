@@ -7,7 +7,10 @@ import socket
 import logging
 import docker
 
-from .config import EXCLUDED_CONTAINERS, NETWORK_INFRA_PATTERNS, CONNTRACK_MIN
+from .config import (
+    EXCLUDED_CONTAINERS, NETWORK_INFRA_PATTERNS, CONNTRACK_MIN,
+    CRITICAL_PORTS_EXCLUDE, CRITICAL_PORTS_PRIORITY
+)
 
 logger = logging.getLogger("hecf.profiler")
 
@@ -137,13 +140,55 @@ def discover_containers() -> dict:
             logger.debug("Skipping excluded container: %s", name)
             continue
 
+        # === Critical Port Auto-Exclusion (runtime detection) ===
+        # Parse the container's bound ports from Docker API.
+        # Format: {"3306/tcp": [{"HostIp": "0.0.0.0", "HostPort": "3306"}], ...}
+        bound_ports = set()
+        auto_exclude_reason = None
+        auto_priority_reason = None
+        try:
+            if hasattr(c, 'ports') and c.ports:
+                for port_proto in c.ports.keys():   # e.g. "3306/tcp"
+                    try:
+                        port_num = int(port_proto.split("/")[0])
+                        bound_ports.add(port_num)
+                    except ValueError:
+                        pass
+        except Exception:
+            pass
+
+        for port in bound_ports:
+            if port in CRITICAL_PORTS_EXCLUDE:
+                auto_exclude_reason = f"port {port} ({CRITICAL_PORTS_EXCLUDE[port]})"
+                break
+
+        if auto_exclude_reason:
+            logger.info(
+                "[AUTO-EXCLUDE] %s — binds %s — excluded from HECF management",
+                name, auto_exclude_reason
+            )
+            continue  # Skip this container entirely
+
+        for port in bound_ports:
+            if port in CRITICAL_PORTS_PRIORITY:
+                auto_priority_reason = f"port {port} ({CRITICAL_PORTS_PRIORITY[port]})"
+                break
+
         mapped_prio = priority_map.get(name)
         if mapped_prio:
             priority = mapped_prio == "high"
         else:
             priority = c.labels.get("hecf.priority") == "high"
 
-        # === Network-Infra Auto-Priority (Gap #15) ===
+        # Auto-priority from critical port (HTTP/HTTPS) overrides label default
+        if auto_priority_reason and not priority:
+            priority = True
+            logger.info(
+                "[AUTO-PRIORITY] %s — binds %s — forced priority=True",
+                name, auto_priority_reason
+            )
+
+        # === Network-Infra Auto-Priority (image/name pattern, Gap #15) ===
         if not priority:
             image_name = ""
             try:
@@ -165,6 +210,8 @@ def discover_containers() -> dict:
             "pid": c.attrs.get("State", {}).get("Pid") if hasattr(c, 'attrs') else None,
             "image": (c.image.tags[0] if c.image and c.image.tags else "unknown"),
             "status": c.status,
+            "ports": sorted(bound_ports),
+            "auto_reason": auto_priority_reason,   # e.g. "port 80 (HTTP)"
         }
         all_discovered[name] = meta
 
@@ -177,6 +224,8 @@ def discover_containers() -> dict:
                 "image": m["image"],
                 "status": m["status"],
                 "priority": "high" if m["priority"] else "low",
+                "ports": m.get("ports", []),
+                "auto_reason": m.get("auto_reason"),   # shown in dashboard modal
             }
             for name, m in all_discovered.items()
         }
