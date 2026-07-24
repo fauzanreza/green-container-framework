@@ -18,17 +18,22 @@ services:
     environment:
       - HECF_MODE=full_hecf
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 128M
     networks:
       - hecf-network
 
   hecf-dashboard:
     build: .
     container_name: hecf-dashboard
-    # Gunicorn: 4 threaded workers — handles concurrent requests without 524 timeout
-    command: ["gunicorn", "--bind", "0.0.0.0:8092", "--workers", "2", "--threads", "4", "--timeout", "60", "dashboard:app"]
+    # Gunicorn: 1 worker × 2 threads — lightweight dashboard needs minimal concurrency
+    command: ["gunicorn", "--bind", "0.0.0.0:8092", "--workers", "1", "--threads", "2", "--timeout", "60", "dashboard:app"]
     ports:
       - "8092:8092"
     volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro  # Read-only: list containers for modal suggestions
       - ./metrics.csv:/app/metrics.csv:ro
       - ./framework_status.json:/app/framework_status.json
       - ./priority_map.json:/app/priority_map.json
@@ -40,6 +45,10 @@ services:
       - /proc/loadavg:/proc/loadavg:ro
       - /proc/uptime:/proc/uptime:ro
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
     networks:
       - hecf-network
 

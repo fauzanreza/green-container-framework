@@ -1160,19 +1160,55 @@ def index():
 
 @app.route("/api/metrics")
 def api_metrics():
+    """Return the last ~200 rows from metrics.csv using tail-read (O(1) memory)."""
     if not os.path.isfile(CSV_PATH) or os.path.getsize(CSV_PATH) == 0:
         return jsonify({"status": "empty", "data": []})
-    data = []
     try:
-        with open(CSV_PATH, newline="") as f:
-            reader = csv.DictReader(f, fieldnames=FIELDNAMES)
-            for i, row in enumerate(reader):
-                if i == 0 and row["time"] == "time":
+        # Read only the tail of the file — seek from end
+        tail_lines = _tail_csv(CSV_PATH, max_lines=200)
+        data = []
+        for line in tail_lines:
+            parts = line.split(",")
+            if len(parts) >= len(FIELDNAMES):
+                row = dict(zip(FIELDNAMES, parts))
+                # Skip header row if present
+                if row.get("time") == "time":
                     continue
                 data.append(row)
+        return jsonify({"status": "success", "data": data})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e), "data": []})
-    return jsonify({"status": "success", "data": data[-200:]})
+
+
+def _tail_csv(filepath, max_lines=200, chunk_size=8192):
+    """Read the last N lines of a file efficiently by seeking from the end."""
+    import os
+    with open(filepath, "rb") as f:
+        # Seek to end to get file size
+        f.seek(0, 2)
+        file_size = f.tell()
+        if file_size == 0:
+            return []
+
+        lines = []
+        remaining = file_size
+        buffer = b""
+
+        while remaining > 0 and len(lines) <= max_lines:
+            read_size = min(chunk_size, remaining)
+            remaining -= read_size
+            f.seek(remaining)
+            chunk = f.read(read_size)
+            buffer = chunk + buffer
+            lines = buffer.split(b"\n")
+
+        # Decode only the lines we need (last max_lines)
+        result = []
+        for raw in lines[-max_lines:]:
+            line = raw.decode("utf-8", errors="replace").strip()
+            if line:
+                result.append(line)
+        return result
 
 @app.route("/api/status")
 def get_status():
@@ -1225,7 +1261,11 @@ def set_priority():
 
 @app.route("/api/targets")
 def get_targets():
-    """Returns managed whitelist + full discovered container list for the UI."""
+    """Returns managed whitelist + full discovered container list for the UI.
+    
+    Primary: queries Docker directly via socket (live container list).
+    Fallback: reads discovered_containers.json (written by engine).
+    """
     managed = []
     if os.path.isfile(TARGETS_PATH):
         try:
@@ -1236,8 +1276,11 @@ def get_targets():
         except:
             pass
 
-    discovered = {}
-    if os.path.isfile(DISCOVERED_PATH):
+    # Primary: query Docker directly for running containers
+    discovered = _discover_containers_live()
+
+    # Fallback: read from engine-written file if Docker query fails
+    if not discovered and os.path.isfile(DISCOVERED_PATH):
         try:
             with open(DISCOVERED_PATH) as f:
                 discovered = json.load(f)
@@ -1249,6 +1292,80 @@ def get_targets():
         "discovered": discovered,
         "mode": "whitelist" if managed else "all"
     })
+
+
+# Containers to exclude from dashboard suggestions (HECF's own containers + tunnels)
+_EXCLUDED_NAMES = {"hecf", "hecf-dashboard", "cloudflared", "cloudflared-tunnel",
+                   "tailscale", "tailscaled", "wireguard"}
+_EXCLUDED_PORTS = {3306, 5432, 6379, 27017, 5672, 22, 2222, 2206}
+
+def _discover_containers_live():
+    """Query Docker socket for all running containers, filtered."""
+    try:
+        import docker as docker_lib
+        client = docker_lib.from_env()
+        running = client.containers.list()
+    except Exception:
+        return {}
+
+    result = {}
+    for c in running:
+        name = c.name
+        if name in _EXCLUDED_NAMES:
+            continue
+
+        # Parse bound ports
+        bound_ports = set()
+        try:
+            if hasattr(c, 'ports') and c.ports:
+                for port_proto in c.ports.keys():
+                    try:
+                        bound_ports.add(int(port_proto.split("/")[0]))
+                    except ValueError:
+                        pass
+        except Exception:
+            pass
+
+        # Skip containers on critical excluded ports (databases, SSH)
+        if bound_ports & _EXCLUDED_PORTS:
+            continue
+
+        # Determine priority
+        image_name = ""
+        try:
+            image_name = c.image.tags[0] if c.image and c.image.tags else "unknown"
+        except Exception:
+            image_name = "unknown"
+
+        priority = "low"
+        auto_reason = None
+
+        # Auto-priority for network infra
+        name_lower = name.lower()
+        img_lower = image_name.lower()
+        for pattern in ("nginx", "caddy", "traefik", "haproxy", "envoy"):
+            if pattern in name_lower or pattern in img_lower:
+                priority = "high"
+                auto_reason = f"network infra ({pattern})"
+                break
+
+        # Auto-priority for HTTP ports
+        if priority == "low":
+            for port in bound_ports:
+                if port in (80, 443, 8080, 8443):
+                    priority = "high"
+                    auto_reason = f"port {port} (HTTP/S)"
+                    break
+
+        result[name] = {
+            "image": image_name,
+            "status": c.status,
+            "priority": priority,
+            "ports": sorted(bound_ports),
+            "auto_reason": auto_reason,
+        }
+
+    return result
 
 
 @app.route("/api/targets", methods=["POST"])

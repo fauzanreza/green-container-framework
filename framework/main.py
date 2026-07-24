@@ -541,36 +541,63 @@ def _apply_security_gates(targets_meta: dict, security: dict) -> dict:
     return filtered
 
 
+MAX_CSV_LINES = 10000  # Hard cap — rotates when exceeded
+
+
 def _write_csv_atomic(csv_path: str, rows: list):
     """
-    Write CSV rows atomically: write to .tmp then rename.
-    Prevents CSV corruption if the process is killed mid-write.
+    Append CSV rows directly — O(1) memory, no full-file read.
+    Periodically rotates the file to prevent unbounded disk growth.
     """
-    tmp_path = csv_path + ".tmp"
     try:
-        existing_lines = []
-        if os.path.exists(csv_path):
-            with open(csv_path, "r", newline="") as f:
-                existing_lines = f.readlines()
-
-        with open(tmp_path, "w", newline="") as f:
-            for line in existing_lines:
-                f.write(line)
+        with open(csv_path, "a", newline="") as f:
             writer = csv.writer(f)
             for row in rows:
                 writer.writerow(row)
-
-        os.replace(tmp_path, csv_path)
-
     except Exception as e:
         logger.error("Failed writing to CSV: %s", e)
-        try:
-            with open(csv_path, "a", newline="") as f:
-                writer = csv.writer(f)
-                for row in rows:
-                    writer.writerow(row)
-        except Exception as e2:
-            logger.error("Fallback CSV write also failed: %s", e2)
+
+    # Rotate if file exceeds MAX_CSV_LINES (checked infrequently)
+    try:
+        _maybe_rotate_csv(csv_path)
+    except Exception as e:
+        logger.debug("CSV rotation check skipped: %s", e)
+
+
+def _maybe_rotate_csv(csv_path: str):
+    """
+    If the CSV exceeds MAX_CSV_LINES, keep only the last half.
+    Uses a streaming approach to avoid loading the entire file.
+    """
+    try:
+        with open(csv_path, "r") as f:
+            # Count lines cheaply
+            line_count = sum(1 for _ in f)
+    except Exception:
+        return
+
+    if line_count <= MAX_CSV_LINES:
+        return
+
+    keep_from = line_count - (MAX_CSV_LINES // 2)
+    tmp_path = csv_path + ".rotate"
+    try:
+        with open(csv_path, "r", newline="") as src, \
+             open(tmp_path, "w", newline="") as dst:
+            for i, line in enumerate(src):
+                # Always keep the header (line 0)
+                if i == 0 or i >= keep_from:
+                    dst.write(line)
+        os.replace(tmp_path, csv_path)
+        logger.info("CSV rotated: %d → %d lines", line_count, MAX_CSV_LINES // 2)
+    except Exception as e:
+        logger.error("CSV rotation failed: %s", e)
+        # Clean up temp file on failure
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
