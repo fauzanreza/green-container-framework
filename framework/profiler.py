@@ -189,12 +189,15 @@ def discover_containers() -> dict:
             )
 
         # === Network-Infra Auto-Priority (image/name pattern, Gap #15) ===
+        image_tag = "unknown"
+        try:
+            if c.image and c.image.tags:
+                image_tag = c.image.tags[0]
+        except Exception:
+            pass
+
         if not priority:
-            image_name = ""
-            try:
-                image_name = (c.image.tags[0] if c.image.tags else "").lower()
-            except Exception:
-                pass
+            image_name = image_tag.lower()
             for pattern in NETWORK_INFRA_PATTERNS:
                 if pattern in name.lower() or pattern in image_name:
                     priority = True
@@ -208,7 +211,7 @@ def discover_containers() -> dict:
             "id": c.id,
             "priority": priority,
             "pid": c.attrs.get("State", {}).get("Pid") if hasattr(c, 'attrs') else None,
-            "image": (c.image.tags[0] if c.image and c.image.tags else "unknown"),
+            "image": image_tag,
             "status": c.status,
             "ports": sorted(bound_ports),
             "auto_reason": auto_priority_reason,   # e.g. "port 80 (HTTP)"
