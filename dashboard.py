@@ -925,6 +925,24 @@ async function fetchMetrics() {
         const containers = Object.values(latest);
         syncDiscoveredFromMetrics(containers);  // fallback: keep modal populated even without discovered.json
 
+        const metricNames = new Set(containers.map(c => c.container_name));
+        if (window._managedList) {
+            window._managedList.forEach(name => {
+                if (!metricNames.has(name)) {
+                    containers.push({
+                        container_name: name,
+                        cpu_percent: 0,
+                        mem_percent: 0,
+                        tier: 'N/A',
+                        ema_pred: 0,
+                        alpha: 0,
+                        action: 'OFFLINE',
+                        power_watt: 0
+                    });
+                }
+            });
+        }
+
         let priorityMap = {};
         try {
             const pres = await fetch('/api/priorities');
@@ -993,6 +1011,7 @@ async function fetchTargets() {
         const res = await fetch('/api/targets');
         const data = await res.json();
         const managed = data.managed || [];
+        window._managedList = managed;
         const discovered = data.discovered || {};
         const isWhitelist = data.mode === 'whitelist';
 
