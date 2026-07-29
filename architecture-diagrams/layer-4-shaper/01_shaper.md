@@ -77,3 +77,74 @@ flowchart TD
 
 ### Catatan
 Meskipun ini dikategorikan sebagai Tools (S1), perhatikan bahwa **nilai yang ditulis** (`cpu_quota`, `mem_ratio`) berasal dari keputusan algoritmik Layer 3. Shaper hanyalah "tangan" yang mengeksekusi perintah "otak".
+
+---
+
+## Deskripsi Alur Berbasis Bisnis/Akademik
+
+```mermaid
+flowchart TD
+    START(["Inisiasi Parameter Kontrol (Cgroups Writer)"])
+
+    PENTING{"Prioritas<br/>Kritikal?"}
+    LINDUNGI["🛡️ Eksklusi: Bypass Shaping<br/>(Prioritas Infrastruktur / Database)"]
+
+    SIMULASI{"Dry-Run<br/>Mode?"}
+    CATAT["Log Eksekusi Saja<br/>(Tanpa Mutasi State Cgroups)"]
+
+    CARI["Resolusi path cgroupfs container target"]
+    KETEMU{"Path<br/>Valid?"}
+    LEWATI["Abort iterasi:<br/>Cgroup Namespace Inaccessible"]
+
+    subgraph CPU["Modulasi Kuota CPU"]
+    CEK_CPU{"Terdapat Target<br/>Batas CPU?"}
+    BEBASKAN["Relaksasi Quota (Unlimited):<br/>cpu.max = 'max 100000'"]
+    BATASI["Tulis Parameter Quota Baru:<br/>cpu.max = '[kuota] 100000'"]
+    VERIFIKASI["Validasi I/O (Read-back):<br/>Konfirmasi komit kernel"]
+    GAGAL{"I/O<br/>Error?"}
+    COBA_LAGI["Eksekusi Retry (Tulis Ulang)"]
+    end
+
+    subgraph RAM["Modulasi Batas Memori (Low-Priority Only)"]
+    PERLU_RAM{"Terdapat Target<br/>Batas Memori?"}
+    LEWAT_RAM["Bypass Modulasi Memori"]
+    HITUNG_RAM["Kalkulasi Resolusi Memori:<br/>Misal: (Memori Aktif / 0.70)"]
+    TULIS_RAM["Tulis ke memory.max"]
+    REM_PERINGATAN["Terapkan memory.high (Soft Limit):<br/>(Memicu kernel page-reclaim proaktif)"]
+    CEK_SWAP{"Ketersediaan<br/>ZRAM (Swap kompresi)?"}
+    IZINKAN_SWAP["Konfigurasi memory.swap.max:<br/>Alokasi ZRAM proporsional"]
+    LARANG_SWAP["Isolasi Swap (memory.swap.max = 0):<br/>Cegah latensi disk I/O"]
+    end
+
+    SELESAI(["Eksekusi Cgroups Selesai"])
+
+    START --> PENTING
+    PENTING -->|Ya| LINDUNGI
+    PENTING -->|Tidak| SIMULASI
+    SIMULASI -->|Ya| CATAT
+    SIMULASI -->|Tidak| CARI
+    CARI --> KETEMU
+    KETEMU -->|Tidak| LEWATI
+    KETEMU -->|Ya| CEK_CPU
+
+    CEK_CPU -->|Tidak| BEBASKAN
+    CEK_CPU -->|Ya| BATASI
+    BEBASKAN --> VERIFIKASI
+    BATASI --> VERIFIKASI
+    VERIFIKASI --> GAGAL
+    GAGAL -->|Ya| COBA_LAGI
+    GAGAL -->|Tidak| PERLU_RAM
+    COBA_LAGI --> PERLU_RAM
+
+    PERLU_RAM -->|Tidak| LEWAT_RAM
+    PERLU_RAM -->|Ya| HITUNG_RAM
+    HITUNG_RAM --> TULIS_RAM
+    TULIS_RAM --> REM_PERINGATAN
+    REM_PERINGATAN --> CEK_SWAP
+    CEK_SWAP -->|Ya| IZINKAN_SWAP
+    CEK_SWAP -->|Tidak| LARANG_SWAP
+
+    LEWAT_RAM --> SELESAI
+    IZINKAN_SWAP --> SELESAI
+    LARANG_SWAP --> SELESAI
+```

@@ -126,3 +126,90 @@ flowchart TD
     CLEANUP --> ADAPTIVE
     ADAPTIVE --> LOOP_START
 ```
+
+---
+
+## Deskripsi Alur Berbasis Bisnis/Akademik
+
+```mermaid
+flowchart TD
+    START(["Inisialisasi Sistem HECF"])
+
+    INIT["Proses Persiapan (Cold-Start):<br/>Profiling Host & Inisialisasi Modul Kontrol"]
+
+    LOOP(["Siklus Pemantauan (Polling Cycle)"])
+
+    SLEEP["Interval Eksekusi<br/>(10s atau 30s, adaptif terhadap beban)"]
+    DISCOVER["Penemuan Container Aktif (Service Discovery)"]
+    ADA{"Terdapat target<br/>valid?"}
+    TUNGGU["Tidak ada target, transisi ke siklus berikutnya"]
+
+    PROSES(["Iterasi per Target Container:"])
+
+    BACA["Akuisisi Metrik Utilisasi<br/>(Persentase CPU dan RAM)"]
+    RUSAK{"Integritas<br/>Data Valid?"}
+    LEWAT["Abaikan iterasi (container tidak responsif/mati)"]
+
+    KLASIFIKASI["Klasifikasi Volatilitas Beban (Tiering):<br/>Analisis pola beban kerja (Stabil vs Spiky)"]
+    PREDIKSI["Prakiraan Tren (EMA):<br/>Prediksi trayektori pemakaian sumber daya"]
+    DARURAT{"Evaluasi Status Kritis (Guardrail):<br/>Apakah terjadi anomali beban persisten?"}
+
+    INTERVENSI["🚨 Tindakan Preventif (Guardrail Aktif):<br/>Restriksi CPU ketat untuk mencegah kelelahan Host (Starvation)"]
+
+    BEBAN{"Tingkat Volatilitas<br/>(P95/P50 Ratio)?"}
+    AGRESIF["Sangat Fluktuatif (Tier 1) →<br/>Restriksi CPU Agresif"]
+    SEIMBANG["Moderat (Tier 2) →<br/>Restriksi CPU Seimbang"]
+    SANTAI["Stabil/Rendah (Tier 3) →<br/>Tanpa Restriksi (Unlimited)"]
+
+    MENGANGGUR{"Kondisi Idle Terdeteksi<br/>(Event-Driven)?"}
+    BEKUKAN["❄️ Eksekusi Micro-Freeze<br/>(Reduksi CPU hingga 0% tanpa merusak state memory)"]
+    TERAPKAN["Terapkan Parameter Kuota CPU & RAM (Cgroups Writer)"]
+
+    ENERGI["Estimasi Konsumsi Energi (Apportionment Daya)"]
+    CATAT["Agregasi Data Telemetri per Container"]
+
+    SELESAI["Seluruh iterasi container selesai"]
+    SIMPAN["Penulisan Data Metrik (Atomic Write) ke Storage"]
+    SESUAIKAN["Penyesuaian Frekuensi Pemantauan (Adaptive Sampling):<br/>Interval direduksi saat beban puncak, direlaksasi saat idle"]
+
+    START --> INIT
+    INIT --> LOOP
+    LOOP --> SLEEP
+    SLEEP --> DISCOVER
+    DISCOVER --> ADA
+    ADA -->|Tidak| TUNGGU
+    TUNGGU --> LOOP
+    ADA -->|Ya| PROSES
+
+    PROSES --> BACA
+    BACA --> RUSAK
+    RUSAK -->|Tidak| LEWAT
+    RUSAK -->|Ya| KLASIFIKASI
+    KLASIFIKASI --> PREDIKSI
+    PREDIKSI --> DARURAT
+    DARURAT -->|Ya, Overload| INTERVENSI
+    DARURAT -->|Tidak, Normal| BEBAN
+
+    BEBAN -->|Tier 1| AGRESIF
+    BEBAN -->|Tier 2| SEIMBANG
+    BEBAN -->|Tier 3| SANTAI
+
+    INTERVENSI --> MENGANGGUR
+    AGRESIF --> MENGANGGUR
+    SEIMBANG --> MENGANGGUR
+    SANTAI --> MENGANGGUR
+
+    MENGANGGUR -->|Ya, Idle| BEKUKAN
+    MENGANGGUR -->|Tidak, Aktif| TERAPKAN
+    BEKUKAN --> ENERGI
+    TERAPKAN --> ENERGI
+    ENERGI --> CATAT
+
+    CATAT -->|Next Container| PROSES
+    CATAT -->|Completed| SELESAI
+    LEWAT -->|Next Container| PROSES
+
+    SELESAI --> SIMPAN
+    SIMPAN --> SESUAIKAN
+    SESUAIKAN --> LOOP
+```

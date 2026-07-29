@@ -62,3 +62,53 @@ flowchart TD
 1. **O(1) Memory Complexity:** Hanya menyimpan satu float per container. Tidak ada array historis, tidak ada model ML, tidak ada dependency berat.
 2. **Proactive, Bukan Reactive:** EMA memprediksi tren *sebelum* CPU benar-benar melewati threshold, memberikan jeda waktu 1–2 sampel bagi Guardrail untuk bertindak lebih awal.
 3. **Anti-ML by Design:** Tesis ini secara sadar menolak ML/DL karena justru akan menambah konsumsi energi (menyalahi tujuan penelitian). EMA adalah solusi matematis yang optimal untuk constraint ini.
+
+---
+
+## Deskripsi Alur Berbasis Bisnis/Akademik
+
+### Forecasting Utilisasi Beban
+
+```mermaid
+flowchart TD
+    START(["Inisialisasi Prediktor Utilisasi Container"])
+
+    PERTAMA{"Pengukuran<br/>Baseline (t=0)?"}
+    MULAI["Data historis absen<br/>→ Prediksi awal = Nilai aktual saat ini (t)"]
+    HASIL_AWAL(["Kembalikan nilai inisialisasi"])
+
+    AMBIL["Akuisisi nilai State Prediksi terakhir (t-1)"]
+    HITUNG["Kalkulasi EMA (Exponential Moving Average):<br/>20% Observasi Aktual (t) +<br/>80% Historis Terbobot (t-1)<br/><br/>(Distribusi bobot memprioritaskan tren<br/>makro untuk mereduksi sensitivitas<br/>terhadap transient spike)"]
+    SIMPAN["Perbarui State Prediksi dalam Memory"]
+    HASIL(["Kembalikan Nilai Forecast<br/>(Prediksi utilisasi pada siklus t+1)"])
+
+    START --> PERTAMA
+    PERTAMA -->|Ya| MULAI
+    MULAI --> HASIL_AWAL
+    PERTAMA -->|Tidak| AMBIL
+    AMBIL --> HITUNG
+    HITUNG --> SIMPAN
+    SIMPAN --> HASIL
+```
+
+### Bagaimana Ramalan Mempengaruhi Guardrail
+
+```mermaid
+flowchart TD
+    RAMALAN(["Ramalan tren dari Prediktor"])
+
+    KIRIM["Kirimkan ke Guardrail<br/>sebagai peringatan dini"]
+
+    DEKAT{"Ramalan menunjukkan<br/>beban mendekati<br/>batas bahaya?"}
+    SENSITIF["Guardrail jadi lebih sensitif<br/>(bereaksi lebih awal,<br/>sebelum beban benar-benar melonjak)"]
+    BIASA["Guardrail tetap normal<br/>(tidak ada tanda bahaya)"]
+
+    PAKAI(["Guardrail menggunakan<br/>sensitivitas yang sudah disesuaikan"])
+
+    RAMALAN --> KIRIM
+    KIRIM --> DEKAT
+    DEKAT -->|Ya, mendekati bahaya| SENSITIF
+    DEKAT -->|Tidak, masih jauh| BIASA
+    SENSITIF --> PAKAI
+    BIASA --> PAKAI
+```

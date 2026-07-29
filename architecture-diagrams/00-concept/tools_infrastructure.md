@@ -70,3 +70,52 @@ flowchart TB
 | `locustfiles/locustfile.py` | Generator beban lalu lintas | Tools (S1) |
 | `targets.json`, `priority_map.json` | Shared state antar proses | Infrastruktur |
 | `metrics.csv` | Data bridge engine → dashboard | Infrastruktur |
+
+---
+
+## Versi Bahasa Sehari-hari
+
+```mermaid
+flowchart TB
+    subgraph INFRA["Peralatan yang Digunakan HECF"]
+        direction TB
+
+        subgraph APPS["3 Aplikasi yang Berjalan di Docker"]
+            MESIN["<b>Mesin HECF</b><br/>Otak utama yang mengatur<br/>semua container lain"]
+            LAYAR["<b>Dashboard HECF</b><br/>Layar pemantauan web<br/>untuk melihat hasil"]
+            BENCHMARK["<b>Aplikasi Uji Coba</b><br/>Aplikasi web dummy untuk<br/>diuji beban kinerjanya"]
+        end
+
+        subgraph FILE["File Komunikasi (cara aplikasi berbicara satu sama lain)"]
+            LAPORAN["File Laporan Metrik<br/>(data CPU, RAM, energi)"]
+            DAFTAR["Daftar Container<br/>yang ingin dipantau"]
+            PRIORITAS["Daftar Prioritas<br/>(mana yang penting)"]
+        end
+
+        subgraph OS["Sistem Operasi Linux"]
+            PENGATUR["Pengatur Sumber Daya<br/>(tempat baca/tulis batas CPU & RAM)"]
+            INFO["Informasi Hardware<br/>(jumlah prosesor, total RAM)"]
+            LISTRIK["Sensor Listrik<br/>(jika ada di motherboard)"]
+            DOCKER_API["Docker<br/>(manajer container)"]
+        end
+
+        subgraph PENGUJI["Alat Penguji Beban"]
+            LOCUST["Locust<br/>Mensimulasikan ribuan<br/>pengunjung web sekaligus"]
+        end
+
+        MESIN -->|"Tulis"| LAPORAN
+        MESIN -->|"Baca"| DAFTAR
+        MESIN -->|"Baca"| PRIORITAS
+
+        LAYAR -->|"Baca"| LAPORAN
+        LAYAR -->|"Baca/Tulis"| DAFTAR
+        LAYAR -->|"Baca/Tulis"| PRIORITAS
+
+        MESIN <-->|"Tanya daftar container"| DOCKER_API
+        MESIN <-->|"Baca & tulis batas"| PENGATUR
+        MESIN -->|"Baca info server"| INFO
+        MESIN -->|"Baca konsumsi listrik"| LISTRIK
+
+        LOCUST -->|"Kirim permintaan web"| BENCHMARK
+    end
+```

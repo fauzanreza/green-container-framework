@@ -96,3 +96,71 @@ flowchart TD
 1. **P95/P50 Spike Ratio:** Bukan menggunakan rata-rata (mean) yang sensitif terhadap outlier. Rasio persentil ini adalah metode statistik robust untuk mendeteksi *burstiness* beban kerja web secara real-time.
 2. **Sliding Window 120 Sampel:** Memberikan konteks historis yang cukup panjang tanpa mengonsumsi memori berlebih.
 3. **Hysteresis (3 sampel stabil):** Algoritma anti-osilasi dari teori kontrol — tier baru hanya di-commit jika konsisten selama 3 evaluasi berturut-turut. Mencegah *flapping* yang menyebabkan overhead percuma.
+
+---
+
+## Deskripsi Alur Berbasis Bisnis/Akademik
+
+```mermaid
+flowchart TD
+    START(["Klasifikasi Volatilitas Beban (Tiering)"])
+
+    SIMPAN["Agregasi Sampel CPU (Sliding Window):<br/>(Buffer historis maksimum 120 observasi)"]
+    TERLALU_BANYAK{"Ukuran Buffer<br/>> 120?"}
+    HAPUS_LAMA["Eviksi data terlama (FIFO)"]
+
+    TENTUKAN(["Fase Evaluasi Volatilitas"])
+
+    CUKUP_DATA{"Jumlah Sampel<br/>≥ 30?"}
+    BELUM_CUKUP["Sampel Inadekuat:<br/>Fallback ke Tier 2 (Balanced / Default Aman)"]
+
+    IDLE{"Deteksi Status Idle?"}
+    MODE_SANTAI["Kondisi Idle:<br/>Terapkan Tier 3 (Soft)"]
+
+    BANDINGKAN["Kalkulasi Distribusi Statistik:<br/>• Baseline Beban (Median / P50)<br/>• Beban Puncak (Persentil 95 / P95)"]
+    RASIO["Kalkulasi Rasio Volatilitas (Spike Ratio):<br/>P95 ÷ P50"]
+
+    KATEGORI{"Klasifikasi Rasio<br/>(Ambang Batas)?"}
+    MELONJAK["Rasio > 2.0 (Spike Ekstrem) →<br/>Tier 1 (Aggressive)"]
+    SEDANG["1.5 ≤ Rasio ≤ 2.0 (Fluktuasi Moderat) →<br/>Tier 2 (Balanced)"]
+    STABIL["Rasio < 1.5 (Beban Stabil) →<br/>Tier 3 (Soft)"]
+
+    PERTAMA{"Inisialisasi Pertama<br/>(Initial State)?"}
+    LANGSUNG["Terapkan Klasifikasi Awal"]
+
+    SAMA{"Klasifikasi Baru ==<br/>State Aktif (Current Tier)?"}
+    TETAP["State Stabil (Tidak ada transisi)"]
+
+    KONSISTEN{"Mekanisme Hysteresis:<br/>Klasifikasi konsisten selama 3 siklus?"}
+    UBAH["✅ Transisi Divalidasi (Commit):<br/>Mutasi State ke Tier Baru"]
+    TAHAN["Transisi Ditunda (Hold):<br/>Fase Hysteresis belum terpenuhi"]
+
+    START --> SIMPAN
+    SIMPAN --> TERLALU_BANYAK
+    TERLALU_BANYAK -->|Ya| HAPUS_LAMA
+    TERLALU_BANYAK -->|Tidak| TENTUKAN
+    HAPUS_LAMA --> TENTUKAN
+
+    TENTUKAN --> CUKUP_DATA
+    CUKUP_DATA -->|Belum| BELUM_CUKUP
+    CUKUP_DATA -->|Sudah| IDLE
+    IDLE -->|Ya| MODE_SANTAI
+    IDLE -->|Tidak| BANDINGKAN
+    BANDINGKAN --> RASIO
+    RASIO --> KATEGORI
+
+    KATEGORI -->|Sangat Fluktuatif| MELONJAK
+    KATEGORI -->|Moderat| SEDANG
+    KATEGORI -->|Stabil| STABIL
+
+    MELONJAK --> PERTAMA
+    SEDANG --> PERTAMA
+    STABIL --> PERTAMA
+
+    PERTAMA -->|Ya| LANGSUNG
+    PERTAMA -->|Tidak| SAMA
+    SAMA -->|Ya| TETAP
+    SAMA -->|Tidak| KONSISTEN
+    KONSISTEN -->|Ya (3 siklus)| UBAH
+    KONSISTEN -->|Belum (Hold)| TAHAN
+```

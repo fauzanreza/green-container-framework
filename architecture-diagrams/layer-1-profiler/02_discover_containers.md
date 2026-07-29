@@ -95,3 +95,97 @@ flowchart TD
     WHITELIST_MODE --> RETURN
     OPEN_MODE --> RETURN
 ```
+
+---
+
+## Deskripsi Alur Berbasis Bisnis/Akademik
+
+```mermaid
+flowchart TD
+    START(["Proses Penemuan Container (Service Discovery)"])
+
+    HUBUNGI["Interogasi Docker Daemon API:<br/>Ambil meta-data seluruh container aktif"]
+    GAGAL{"Koneksi<br/>API Gagal?"}
+    KOSONG["Abort operasi:<br/>Kembalikan set kosong (empty list)"]
+
+    BACA_PENGATURAN["Konfigurasi Eksternal:<br/>• Muat Peta Prioritas (Priority Map)<br/>• Muat Daftar Target (Target List)"]
+
+    PERIKSA(["Iterasi Evaluasi per Container"])
+
+    DIRI_SENDIRI{"Mendeteksi Self-Instance<br/>(HECF Engine)?"}
+    LEWAT1["Bypass: Hindari rekursi kontrol (self-monitoring)"]
+
+    DILARANG{"Terdaftar dalam<br/>Exclusion List (Hardcoded)?"}
+    LEWAT2["Bypass: Container infrastruktur kritikal"]
+
+    CEK_PORT["Inspeksi Binding Port Jaringan"]
+    PORT_BAHAYA{"Terdeteksi Port Database?<br/>(MySQL, PostgreSQL, Redis)?"}
+    LEWAT3["Bypass Otomatis:<br/>Mitigasi risiko korupsi I/O database"]
+
+    PORT_WEB{"Terdeteksi Port Web Publik?<br/>(HTTP 80, HTTPS 443, 8080)?"}
+    PENTING_WEB["Penandaan Prioritas: Web Service Kritikal"]
+
+    CEK_SETTING{"Evaluasi Prioritas Konfigurasi Manual?"}
+    PAKAI_MANUAL["Terapkan Bobot Prioritas Manual"]
+    CEK_LABEL{"Evaluasi Metadata Label Docker?"}
+    PAKAI_LABEL["Terapkan Bobot Berdasarkan Label"]
+
+    CEK_NAMA{"Inspeksi RegEx Penamaan Node<br/>('nginx', 'traefik', proxy)?"}
+    PENTING_INFRA["Penandaan Prioritas: Infrastruktur Jaringan"]
+
+    MASUKKAN["Registrasi Container ke<br/>Daftar Inventaris Terpantau"]
+
+    LANJUT["Lanjutkan ke iterasi container berikutnya"]
+
+    TULIS["Ekspor Inventaris ke Persisten Storage<br/>(Sinkronisasi State dengan Dashboard)"]
+
+    CEK_WHITELIST{"Mode Pembatasan Target<br/>(Whitelist) Aktif?"}
+    WHITELIST["Filter Diterapkan:<br/>Isolasi pada container spesifik"]
+    SEMUA["Mode Global (Promiscuous):<br/>Pantau seluruh container yang terdaftar"]
+
+    SELESAI(["Kembalikan Objek Target Tersaring<br/>ke Engine Utama"])
+
+    START --> HUBUNGI
+    HUBUNGI --> GAGAL
+    GAGAL -->|Ya| KOSONG
+    GAGAL -->|Tidak| BACA_PENGATURAN
+    BACA_PENGATURAN --> PERIKSA
+
+    PERIKSA --> DIRI_SENDIRI
+    DIRI_SENDIRI -->|Ya| LEWAT1
+    DIRI_SENDIRI -->|Tidak| DILARANG
+    LEWAT1 --> LANJUT
+
+    DILARANG -->|Ya| LEWAT2
+    DILARANG -->|Tidak| CEK_PORT
+    LEWAT2 --> LANJUT
+
+    CEK_PORT --> PORT_BAHAYA
+    PORT_BAHAYA -->|Ya| LEWAT3
+    PORT_BAHAYA -->|Tidak| PORT_WEB
+    LEWAT3 --> LANJUT
+
+    PORT_WEB -->|Ya| PENTING_WEB
+    PORT_WEB -->|Tidak| CEK_SETTING
+    PENTING_WEB --> CEK_SETTING
+
+    CEK_SETTING -->|Ya| PAKAI_MANUAL
+    CEK_SETTING -->|Tidak| CEK_LABEL
+    PAKAI_MANUAL --> CEK_NAMA
+    CEK_LABEL --> PAKAI_LABEL
+    PAKAI_LABEL --> CEK_NAMA
+
+    CEK_NAMA -->|Ya| PENTING_INFRA
+    CEK_NAMA -->|Tidak| MASUKKAN
+    PENTING_INFRA --> MASUKKAN
+    MASUKKAN --> LANJUT
+
+    LANJUT -->|Masih ada| PERIKSA
+    LANJUT -->|Semua sudah| TULIS
+
+    TULIS --> CEK_WHITELIST
+    CEK_WHITELIST -->|Ya| WHITELIST
+    CEK_WHITELIST -->|Tidak| SEMUA
+    WHITELIST --> SELESAI
+    SEMUA --> SELESAI
+```

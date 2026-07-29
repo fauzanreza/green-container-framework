@@ -57,3 +57,48 @@ flowchart TB
 | **Plan** | Layer 3A | Guardrail menentukan apakah perlu intervensi darurat |
 | **Execute** | Layer 4 | Tulis parameter cgroups (cpu.max, memory.max, cgroup.freeze) |
 | **Knowledge** | Supplementary | Estimasi energi, overhead tracking, mode selector |
+
+---
+
+## Deskripsi Alur Berbasis Bisnis/Akademik
+
+```mermaid
+flowchart TB
+    subgraph HOST["Node / Server Tuan Rumah (Host)"]
+        direction TB
+
+        subgraph MAPE["HECF Engine — Siklus Kontrol Otomatis (Closed-Loop)"]
+            direction TB
+
+            L1["<b>Fase 1: Penemuan & Profiling Lingkungan</b><br/>───────────────<br/>• Verifikasi kapasitas CPU dan memori Host<br/>• Identifikasi container yang sedang berjalan<br/>• Terapkan pemetaan prioritas layanan"]
+
+            L2["<b>Fase 2: Pemantauan Metrik Terdistribusi</b><br/>───────────────<br/>• Akuisisi metrik utilisasi dari cgroups<br/>• Terapkan frekuensi sampling adaptif<br/>  (Interval rapat saat beban tinggi, renggang saat idle)"]
+
+            L3["<b>Fase 3: Analisis Kebijakan & Prediksi</b><br/>───────────────<br/>• Evaluasi kondisi kelebihan beban (Overload Guardrail)<br/>• Klasifikasi volatilitas beban (P95/P50)<br/>• Prakiraan tren penggunaan ke depan (EMA)"]
+
+            L4["<b>Fase 4: Eksekusi Alokasi Sumber Daya</b><br/>───────────────<br/>• Modifikasi batas atas (quota) CPU dan Memori<br/>• Transisi ke status Micro-Freeze saat kondisi idle<br/>  (Optimasi efisiensi energi tanpa terminasi proses)"]
+
+            SUP["<b>Layanan Pendukung (Supplementary)</b><br/>───────────────<br/>• Kalkulasi estimasi konsumsi energi<br/>• Pencatatan metrik overhead kerangka kerja"]
+
+            L1 -->|"Daftar container<br/>& profil host"| L2
+            L2 -->|"Data utilisasi<br/>CPU & Memori"| L3
+            L3 -->|"Keputusan kontrol:<br/>hemat / normal / darurat"| L4
+            L4 -->|"Umpan balik (Feedback):<br/>kondisi terbaru"| L2
+        end
+
+        KERNEL[("Sistem Operasi Linux<br/>Manajer Sumber Daya (cgroups)")]
+        DOCKER[("Docker Daemon<br/>Manajer Container")]
+
+        L1 <-->|"Pengambilan data state container"| DOCKER
+        L2 <-->|"Pembacaan langsung I/O metrik kernel"| KERNEL
+        L4 -->|"Penulisan parameter kontrol batas baru"| KERNEL
+    end
+
+    LOCUST["🔧 Load Generator (Locust)<br/>(Mensimulasikan trafik sistem)"]
+    TARGET["📦 Target Container<br/>(Aplikasi yang dievaluasi)"]
+    DASH["📊 Dashboard Pemantauan<br/>(Visualisasi telemetri)"]
+
+    LOCUST -->|"Injeksi trafik HTTP"| TARGET
+    TARGET <-->|"Dikelola oleh"| DOCKER
+    SUP -->|"Agregasi data metrik"| DASH
+```

@@ -86,3 +86,71 @@ flowchart TD
 1. **Menyelesaikan Masalah Fundamental:** Micro-Freezing hanya berguna jika koneksi tidak putus saat container frozen. Tanpa verifikasi backlog, freeze bisa lebih merusak daripada throttling biasa.
 2. **Dua Level Verifikasi:** Sistem mengecek BAIK kernel-level (`somaxconn`) MAUPUN app-level (`listen()` backlog) — karena aplikasi yang dikompilasi dengan `listen(fd, 5)` tetap akan drop koneksi meskipun somaxconn=4096.
 3. **Matematik Kapasitas Antrean:** Secara eksplisit menghitung `expected_queue_depth = RPS × freeze_duration` — ini formula matematis yang menjembatani subsistem jaringan dengan subsistem pembekuan cgroups.
+
+---
+
+## Deskripsi Alur Berbasis Bisnis/Akademik
+
+### Verifikasi Kapasitas Antrean Kernel (Host Level)
+
+```mermaid
+flowchart TD
+    START(["Pre-flight Check:<br/>Validasi Kapasitas Antrean TCP (Backlog)"])
+
+    BACA["Akuisisi Parameter Kernel (sysctl):<br/>Baca net.core.somaxconn (Kapasitas Maksimal TCP)"]
+    GAGAL{"I/O<br/>Error?"}
+    ASUMSI["Fallback: Asumsikan nilai standar OS (Default)"]
+
+    HITUNG_PAKET["Kalkulasi Estimasi Kedalaman Antrean (Queue Depth):<br/>Expected Queue = Expected RPS × Freeze Duration<br/>(Misal: 100 req/s × 1 detik = 100 koneksi tertahan)"]
+    HITUNG_MINIMAL["Kalkulasi Persyaratan Kapasitas Minimum:<br/>Minimum Required = 2 × Expected Queue<br/>(Safety Margin)"]
+
+    CUKUP{"somaxconn aktual<br/>≥ Kapasitas Minimum?"}
+    AMAN["✅ STATUS: COMPLIANT<br/>Kapasitas antrean Host memadai untuk<br/>menahan koneksi selama Micro-Freeze"]
+    BAHAYA["⚠ STATUS: NON-COMPLIANT<br/>Kapasitas terlalu rendah (Risiko TCP Drop / Timeout).<br/>Membutuhkan tuning kernel (sysctl)"]
+
+    SELESAI(["Kembalikan Status Verifikasi"])
+
+    START --> BACA
+    BACA --> GAGAL
+    GAGAL -->|Ya| ASUMSI
+    GAGAL -->|Tidak| HITUNG_PAKET
+    ASUMSI --> HITUNG_PAKET
+    HITUNG_PAKET --> HITUNG_MINIMAL
+    HITUNG_MINIMAL --> CUKUP
+    CUKUP -->|Ya| AMAN
+    CUKUP -->|Tidak| BAHAYA
+    AMAN --> SELESAI
+    BAHAYA --> SELESAI
+```
+
+### Verifikasi Antrean Soket (Application Level)
+
+```mermaid
+flowchart TD
+    START2(["Verifikasi Soket Level Aplikasi:<br/>Validasi parameter listen() backlog di dalam Container"])
+
+    CARI_PROSES["Resolusi PID Utama (Process ID)<br/>dari Meta-Data Container"]
+    KETEMU{"PID<br/>Terdeteksi?"}
+    LEWATI(["Abort operasi (Keterbatasan akses namespace)"])
+
+    BACA_PINTU["Eksplorasi `/proc/{pid}/net/tcp`:<br/>Identifikasi soket berstatus LISTEN (State 0A)"]
+    ADA_PINTU{"Soket LISTEN<br/>Tersedia?"}
+    TIDAK_ADA(["Abort operasi (Tidak ada layanan jaringan terbuka)"])
+
+    CARI_TERKECIL["Kalkulasi Bottleneck:<br/>Identifikasi kapasitas `tx_queue` terkecil dari seluruh soket aktif"]
+    CUKUP{"Kapasitas<br/>≥ 128 (Minimum)? "}
+
+    APP_AMAN["✅ STATUS: COMPLIANT<br/>Soket aplikasi dikonfigurasi dengan backlog yang memadai"]
+    APP_KECIL["⚠ STATUS: NON-COMPLIANT (Aplikasi Hardcoded)<br/>Parameter listen() aplikasi terlalu kecil.<br/>Micro-Freeze akan memicu koneksi terputus secara sepihak."]
+
+    START2 --> CARI_PROSES
+    CARI_PROSES --> KETEMU
+    KETEMU -->|Tidak| LEWATI
+    KETEMU -->|Ya| BACA_PINTU
+    BACA_PINTU --> ADA_PINTU
+    ADA_PINTU -->|Tidak| TIDAK_ADA
+    ADA_PINTU -->|Ya| CARI_TERKECIL
+    CARI_TERKECIL --> CUKUP
+    CUKUP -->|Ya| APP_AMAN
+    CUKUP -->|Tidak| APP_KECIL
+```

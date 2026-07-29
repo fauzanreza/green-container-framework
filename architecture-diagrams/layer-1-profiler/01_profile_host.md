@@ -62,3 +62,64 @@ flowchart TD
     CT_OK --> RETURN
     CT_WARN --> RETURN
 ```
+
+---
+
+## Deskripsi Alur Berbasis Bisnis/Akademik
+
+```mermaid
+flowchart TD
+    START(["Inisialisasi Sistem (Cold-Start)"])
+
+    CEK_CPU["Deteksi Topologi CPU:<br/>Hitung jumlah logical processor pada host"]
+    CPU_GAGAL{"Eksekusi<br/>Gagal?"}
+    CPU_CADANGAN["Fallback: Kalkulasi alternatif<br/>menggunakan API sistem operasi"]
+    CPU_DAPAT["Kapasitas CPU (core_count) terverifikasi"]
+
+    CEK_RAM["Deteksi Kapasitas Memori:<br/>Evaluasi total RAM pada host"]
+    RAM_DAPAT["Kapasitas Memori terverifikasi"]
+
+    HITUNG_DAYA["Kalkulasi Konstanta Estimasi Daya:<br/>• Baseline Idle (P_idle) = core_count × 3.75 Watt<br/>• Kapasitas Maksimal (P_max) = core_count × 13.5 Watt"]
+
+    CEK_SENSOR["Deteksi Sensor Daya Perangkat Keras:<br/>(Eksplorasi modul Intel RAPL / AMD hwmon)"]
+    SENSOR_ADA{"Sensor<br/>Tersedia?"}
+    SENSOR_YA["✅ Mode Hardware-True:<br/>Pengukuran daya riil teraktivasi"]
+    SENSOR_TIDAK["⚠ Sensor Absen:<br/>Mode Software Estimation teraktivasi"]
+
+    CEK_ASLI["Verifikasi Integritas File Sistem (/proc):<br/>Validasi namespace mount point"]
+    ASLI{"Kesesuaian<br/>Data?"}
+    ASLI_OK["✅ Validasi Namespace Berhasil"]
+    ASLI_GAGAL["⚠ PERINGATAN KRITIS: Inkonsistensi Namespace!<br/>Indikasi isolasi file sistem parsial"]
+
+    CEK_JARINGAN["Verifikasi Kapasitas Koneksi (Conntrack):<br/>Evaluasi batas netfilter pada kernel"]
+    JARINGAN{"Kapasitas<br/>Memadai?"}
+    JARINGAN_OK["✅ Kapasitas Conntrack Memadai"]
+    JARINGAN_WARN["⚠ PERINGATAN: Kapasitas Terbatas!<br/>Risiko packet drop pada trafik tinggi"]
+
+    SELESAI(["Profil Konfigurasi Host Terbentuk<br/>Sistem siap beroperasi"])
+
+    START --> CEK_CPU
+    CEK_CPU --> CPU_GAGAL
+    CPU_GAGAL -->|Ya| CPU_CADANGAN
+    CPU_GAGAL -->|Tidak| CPU_DAPAT
+    CPU_CADANGAN --> CEK_RAM
+    CPU_DAPAT --> CEK_RAM
+    CEK_RAM --> RAM_DAPAT
+    RAM_DAPAT --> HITUNG_DAYA
+    HITUNG_DAYA --> CEK_SENSOR
+    CEK_SENSOR --> SENSOR_ADA
+    SENSOR_ADA -->|Ya| SENSOR_YA
+    SENSOR_ADA -->|Tidak| SENSOR_TIDAK
+    SENSOR_YA --> CEK_ASLI
+    SENSOR_TIDAK --> CEK_ASLI
+    CEK_ASLI --> ASLI
+    ASLI -->|Ya| ASLI_OK
+    ASLI -->|Tidak| ASLI_GAGAL
+    ASLI_OK --> CEK_JARINGAN
+    ASLI_GAGAL --> CEK_JARINGAN
+    CEK_JARINGAN --> JARINGAN
+    JARINGAN -->|Ya| JARINGAN_OK
+    JARINGAN -->|Tidak| JARINGAN_WARN
+    JARINGAN_OK --> SELESAI
+    JARINGAN_WARN --> SELESAI
+```

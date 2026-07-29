@@ -51,3 +51,44 @@ flowchart TD
 1. **Hybrid Adaptive Model:** Secara otomatis mendeteksi dan memilih mode terbaik (hardware atau software) tanpa konfigurasi manual.
 2. **Proportional Power Apportionment:** Sensor hardware hanya melaporkan total daya CPU package. Algoritma ini secara matematis membagi total tersebut ke setiap container berdasarkan proporsi penggunaan CPU mereka.
 3. **Self-Calibrating:** P_idle dan P_max bukan konstanta tetap — mereka dihitung secara dinamis dari jumlah core fisik host, sehingga model skala otomatis dari 2-core hingga 16-core.
+
+---
+
+## Deskripsi Alur Berbasis Bisnis/Akademik
+
+```mermaid
+flowchart TD
+    START(["Estimasi Konsumsi Energi Container"])
+
+    SENSOR{"Validasi Hardware:<br/>Sensor Daya Fisik<br/>(Sysfs) Terdeteksi?"}
+
+    subgraph CARA_A["Mode A — Pengukuran Hardware (Hardware-True)"]
+        BACA_TOTAL["Akuisisi Daya Total Host (Package Power)<br/>berdasarkan metrik fisik aktual"]
+        HITUNG_BAGIAN["Kalkulasi Proporsi CPU (Fraction):<br/>Utilisasi CPU Target ÷ Total Kapasitas CPU Host<br/>(Misal: 25% CPU pada Host 4-Core = 25% ÷ 400% = 0.0625)"]
+        DAYA_HW["Alokasi Daya Proporsional (Apportionment):<br/>Daya Container = Daya Total Host × Proporsi CPU<br/>(Misal: 45 W × 0.0625 = 2.81 Watt)"]
+    end
+
+    subgraph CARA_B["Mode B — Pemodelan Software (Software Estimation)"]
+        PERKIRAAN["Terapkan Linear Power Model<br/>(Berdasarkan Jarus et al., 2014):<br/><br/>P(t) = P_idle + (P_max - P_idle) × Utilisasi<br/><br/>Contoh:<br/>15.0 W + (54.0 - 15.0) × 0.25<br/>= 15.0 + 9.75 = 24.75 Watt"]
+        CATATAN["Parameter P_idle dan P_max dikalibrasi<br/>secara dinamis sesuai topologi core CPU host"]
+    end
+
+    DAYA["Hasil Estimasi Daya (Watt) Terkonsolidasi"]
+
+    ENERGI["Kalkulasi Energi Akumulatif (Integration over time):<br/>E (kWh) = Daya (W) × Waktu (s) / 3,600,000<br/><br/>Contoh: 24.75 W × 30s / 3,600,000<br/>= 0.000000206 kWh"]
+
+    HASIL(["Return Metadata Metrik:<br/>• Instantaneous Power (Watt)<br/>• Akumulasi Energi (kWh)"])
+
+    START --> SENSOR
+    SENSOR -->|Ya, Sensor Fisik| BACA_TOTAL
+    BACA_TOTAL --> HITUNG_BAGIAN
+    HITUNG_BAGIAN --> DAYA_HW
+    DAYA_HW --> DAYA
+
+    SENSOR -->|Tidak, Fallback| PERKIRAAN
+    PERKIRAAN --> CATATAN
+    CATATAN --> DAYA
+
+    DAYA --> ENERGI
+    ENERGI --> HASIL
+```
