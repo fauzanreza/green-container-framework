@@ -129,48 +129,48 @@ flowchart TD
 
 ---
 
-## Deskripsi Alur Berbasis Bisnis/Akademik
+## Alur Logika Konseptual
 
 ```mermaid
 flowchart TD
     START(["Inisialisasi Sistem HECF"])
 
-    INIT["Proses Persiapan (Cold-Start):<br/>Profiling Host & Inisialisasi Modul Kontrol"]
+    INIT["Cold-Start Initialization:<br/>Host Profiling & Module Setup"]
 
-    LOOP(["Siklus Pemantauan (Polling Cycle)"])
+    LOOP(["Polling Cycle"])
 
-    SLEEP["Interval Eksekusi<br/>(10s atau 30s, adaptif terhadap beban)"]
-    DISCOVER["Penemuan Container Aktif (Service Discovery)"]
-    ADA{"Terdapat target<br/>valid?"}
-    TUNGGU["Tidak ada target, transisi ke siklus berikutnya"]
+    SLEEP["Adaptive Sleep Interval<br/>(10s atau 30s)"]
+    DISCOVER["Service Discovery:<br/>Fetch Active Containers"]
+    ADA{"Target Valid<br/>Tersedia?"}
+    TUNGGU["Wait (Transisi ke siklus berikutnya)"]
 
     PROSES(["Iterasi per Target Container:"])
 
-    BACA["Akuisisi Metrik Utilisasi<br/>(Persentase CPU dan RAM)"]
-    RUSAK{"Integritas<br/>Data Valid?"}
-    LEWAT["Abaikan iterasi (container tidak responsif/mati)"]
+    BACA["Akuisisi Metrik Utilisasi<br/>(CPU & RAM %)"]
+    RUSAK{"Integritas<br/>Valid?"}
+    LEWAT["Abaikan (Container Terminated/Stale)"]
 
-    KLASIFIKASI["Klasifikasi Volatilitas Beban (Tiering):<br/>Analisis pola beban kerja (Stabil vs Spiky)"]
-    PREDIKSI["Prakiraan Tren (EMA):<br/>Prediksi trayektori pemakaian sumber daya"]
-    DARURAT{"Evaluasi Status Kritis (Guardrail):<br/>Apakah terjadi anomali beban persisten?"}
+    KLASIFIKASI["Volatility Classification (Tiering):<br/>Evaluasi pola beban (Spiky/Stable)"]
+    PREDIKSI["Trend Forecasting (EMA):<br/>Prediksi trayektori beban"]
+    DARURAT{"Guardrail Check:<br/>Persistent Overload Anomaly?"]
 
-    INTERVENSI["🚨 Tindakan Preventif (Guardrail Aktif):<br/>Restriksi CPU ketat untuk mencegah kelelahan Host (Starvation)"]
+    INTERVENSI["🚨 Preventative Action (Guardrail):<br/>Strict CPU Throttling (Anti-Starvation)"]
 
-    BEBAN{"Tingkat Volatilitas<br/>(P95/P50 Ratio)?"}
-    AGRESIF["Sangat Fluktuatif (Tier 1) →<br/>Restriksi CPU Agresif"]
-    SEIMBANG["Moderat (Tier 2) →<br/>Restriksi CPU Seimbang"]
-    SANTAI["Stabil/Rendah (Tier 3) →<br/>Tanpa Restriksi (Unlimited)"]
+    BEBAN{"Tingkat Volatilitas<br/>(P95/P50)?"}
+    AGRESIF["Tier 1 (Aggressive) →<br/>Strict CPU Quota"]
+    SEIMBANG["Tier 2 (Balanced) →<br/>Moderate CPU Quota"]
+    SANTAI["Tier 3 (Soft) →<br/>Unlimited (No Quota)"]
 
-    MENGANGGUR{"Kondisi Idle Terdeteksi<br/>(Event-Driven)?"}
-    BEKUKAN["❄️ Eksekusi Micro-Freeze<br/>(Reduksi CPU hingga 0% tanpa merusak state memory)"]
-    TERAPKAN["Terapkan Parameter Kuota CPU & RAM (Cgroups Writer)"]
+    MENGANGGUR{"Idle Detection<br/>(Event-Driven)?"}
+    BEKUKAN["❄️ Execute Micro-Freeze<br/>(Reduksi CPU 0% State Preserved)"]
+    TERAPKAN["Terapkan Resource Quota<br/>(Cgroups Writer)"]
 
-    ENERGI["Estimasi Konsumsi Energi (Apportionment Daya)"]
-    CATAT["Agregasi Data Telemetri per Container"]
+    ENERGI["Power Apportionment (Estimasi Energi)"]
+    CATAT["Agregasi Data Telemetri per Target"]
 
-    SELESAI["Seluruh iterasi container selesai"]
-    SIMPAN["Penulisan Data Metrik (Atomic Write) ke Storage"]
-    SESUAIKAN["Penyesuaian Frekuensi Pemantauan (Adaptive Sampling):<br/>Interval direduksi saat beban puncak, direlaksasi saat idle"]
+    SELESAI["Iterasi Target Selesai"]
+    SIMPAN["Atomic Write Telemetri ke Storage"]
+    SESUAIKAN["Adaptive Sampling Adjustment:<br/>Reduksi interval saat beban tinggi"]
 
     START --> INIT
     INIT --> LOOP
@@ -205,9 +205,9 @@ flowchart TD
     TERAPKAN --> ENERGI
     ENERGI --> CATAT
 
-    CATAT -->|Next Container| PROSES
+    CATAT -->|Next Target| PROSES
     CATAT -->|Completed| SELESAI
-    LEWAT -->|Next Container| PROSES
+    LEWAT -->|Next Target| PROSES
 
     SELESAI --> SIMPAN
     SIMPAN --> SESUAIKAN

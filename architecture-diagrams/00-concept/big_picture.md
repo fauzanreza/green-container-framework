@@ -60,45 +60,45 @@ flowchart TB
 
 ---
 
-## Deskripsi Alur Berbasis Bisnis/Akademik
+## Alur Logika Konseptual
 
 ```mermaid
 flowchart TB
-    subgraph HOST["Node / Server Tuan Rumah (Host)"]
+    subgraph HOST["Server Host"]
         direction TB
 
-        subgraph MAPE["HECF Engine — Siklus Kontrol Otomatis (Closed-Loop)"]
+        subgraph MAPE["HECF Engine — Closed-Loop Control Cycle"]
             direction TB
 
-            L1["<b>Fase 1: Penemuan & Profiling Lingkungan</b><br/>───────────────<br/>• Verifikasi kapasitas CPU dan memori Host<br/>• Identifikasi container yang sedang berjalan<br/>• Terapkan pemetaan prioritas layanan"]
+            L1["<b>Phase 1: Environment Discovery & Profiling</b><br/>───────────────<br/>• Verifikasi Host CPU & Memory capacity<br/>• Identifikasi Active Containers<br/>• Terapkan Service Priority Mapping"]
 
-            L2["<b>Fase 2: Pemantauan Metrik Terdistribusi</b><br/>───────────────<br/>• Akuisisi metrik utilisasi dari cgroups<br/>• Terapkan frekuensi sampling adaptif<br/>  (Interval rapat saat beban tinggi, renggang saat idle)"]
+            L2["<b>Phase 2: Distributed Metric Monitoring</b><br/>───────────────<br/>• Akuisisi utilisasi dari cgroups<br/>• Terapkan Adaptive Sampling<br/>  (Interval rapat saat beban tinggi)"]
 
-            L3["<b>Fase 3: Analisis Kebijakan & Prediksi</b><br/>───────────────<br/>• Evaluasi kondisi kelebihan beban (Overload Guardrail)<br/>• Klasifikasi volatilitas beban (P95/P50)<br/>• Prakiraan tren penggunaan ke depan (EMA)"]
+            L3["<b>Phase 3: Policy Analysis & Prediction</b><br/>───────────────<br/>• Evaluasi Overload Guardrail<br/>• Klasifikasi Volatilitas (P95/P50)<br/>• Prakiraan Utilisasi Masa Depan (EMA)"]
 
-            L4["<b>Fase 4: Eksekusi Alokasi Sumber Daya</b><br/>───────────────<br/>• Modifikasi batas atas (quota) CPU dan Memori<br/>• Transisi ke status Micro-Freeze saat kondisi idle<br/>  (Optimasi efisiensi energi tanpa terminasi proses)"]
+            L4["<b>Phase 4: Resource Allocation Execution</b><br/>───────────────<br/>• Modifikasi Quota (CPU & Memory)<br/>• Transisi Micro-Freeze saat Idle<br/>  (Optimasi efisiensi tanpa terminasi)"]
 
-            SUP["<b>Layanan Pendukung (Supplementary)</b><br/>───────────────<br/>• Kalkulasi estimasi konsumsi energi<br/>• Pencatatan metrik overhead kerangka kerja"]
+            SUP["<b>Supplementary Knowledge Base</b><br/>───────────────<br/>• Kalkulasi Estimasi Energi<br/>• Pencatatan HECF Overhead"]
 
-            L1 -->|"Daftar container<br/>& profil host"| L2
-            L2 -->|"Data utilisasi<br/>CPU & Memori"| L3
-            L3 -->|"Keputusan kontrol:<br/>hemat / normal / darurat"| L4
-            L4 -->|"Umpan balik (Feedback):<br/>kondisi terbaru"| L2
+            L1 -->|"Container Inventory<br/>& Host Profile"| L2
+            L2 -->|"CPU & Memory<br/>Utilization Data"| L3
+            L3 -->|"Control Decisions:<br/>Hold / Throttle / Freeze"| L4
+            L4 -->|"State Feedback:<br/>Latest utilization metrics"| L2
         end
 
-        KERNEL[("Sistem Operasi Linux<br/>Manajer Sumber Daya (cgroups)")]
-        DOCKER[("Docker Daemon<br/>Manajer Container")]
+        KERNEL[("Linux OS<br/>Resource Manager (cgroups)")]
+        DOCKER[("Docker Daemon<br/>Container Runtime API")]
 
-        L1 <-->|"Pengambilan data state container"| DOCKER
-        L2 <-->|"Pembacaan langsung I/O metrik kernel"| KERNEL
-        L4 -->|"Penulisan parameter kontrol batas baru"| KERNEL
+        L1 <-->|"Fetch Container State"| DOCKER
+        L2 <-->|"Direct I/O Metric Read"| KERNEL
+        L4 -->|"Write Control Parameters"| KERNEL
     end
 
-    LOCUST["🔧 Load Generator (Locust)<br/>(Mensimulasikan trafik sistem)"]
-    TARGET["📦 Target Container<br/>(Aplikasi yang dievaluasi)"]
-    DASH["📊 Dashboard Pemantauan<br/>(Visualisasi telemetri)"]
+    LOCUST["🔧 Load Generator (Locust)<br/>(Mensimulasikan Web Traffic)"]
+    TARGET["📦 Target Container<br/>(Aplikasi dalam pengujian)"]
+    DASH["📊 Monitoring Dashboard<br/>(Visualisasi Telemetri)"]
 
-    LOCUST -->|"Injeksi trafik HTTP"| TARGET
+    LOCUST -->|"Injeksi HTTP Requests"| TARGET
     TARGET <-->|"Dikelola oleh"| DOCKER
-    SUP -->|"Agregasi data metrik"| DASH
+    SUP -->|"Agregasi Data Telemetri"| DASH
 ```

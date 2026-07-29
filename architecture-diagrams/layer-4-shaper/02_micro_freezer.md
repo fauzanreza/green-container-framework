@@ -1,61 +1,50 @@
-# Flowchart — MicroFreezer.evaluate() (Layer 4 Extension)
+# Flowchart — MicroFreezer.apply_freeze() (Layer 4)
 
-> **Kode Sumber:** `framework/security/micro_freezer.py` → class `MicroFreezer`, fungsi `evaluate()` (baris 78–145), `_freeze()` (baris 147–166), `_thaw()` (baris 168–188), `_check_populated()` (baris 221–237)
-> **Posisi di Diagram:** Layer 4 — Adaptive Resource Shaping → Micro-Freezing
+> **Kode Sumber:** `framework/micro_freezer.py` → class `MicroFreezer`, fungsi `apply_freeze()` (baris 32–106)
+> **Posisi di Diagram:** Layer 4 — Adaptive Resource Shaping → 4B Micro-Freezer
 > **Kategori:** 🌟 INOVASI ALGORITMA (S2)
 
-Algoritma **Event-Driven Micro-Freezing** yang mendeteksi idle state container melalui sinyal kernel (`cgroup.events populated=0`), lalu menulis `cgroup.freeze=1` untuk menjatuhkan CPU ke **literal 0%** tanpa mematikan container.
+Algoritma pembekuan container tingkat milidetik (`cgroup.freeze`). Dioptimasi untuk mereduksi konsumsi CPU idle ke absolute 0% tanpa memutus koneksi TCP. Menggunakan eBPF untuk mendeteksi transaksi yang sedang berjalan (Safety Gate) dan `cgroup.events` untuk deteksi idle.
 
 ```mermaid
 flowchart TD
-    START(["MicroFreezer.evaluate(name, id, priority, cpu%)"])
+    START(["apply_freeze(container_name, is_dry_run)"])
 
-    IS_PRIORITY{"Container<br/>priority = True?"}
-    EXEMPT(["Return: action=none<br/>reason=priority_exempt<br/>(database/infra tidak boleh dibekukan)"])
+    IS_PRIORITY{"Tier-0<br/>(Prio)?"}
+    EXEMPT(["Return False<br/>(Bypass)"])
 
-    FIRST_SEEN{"Pertama kali<br/>melihat container ini?"}
-    INIT_STATE["Inisialisasi state:<br/>frozen=False, frozen_at=0,<br/>last_activity=now"]
-    FIRST_RET(["Return: action=none<br/>reason=first_seen"])
+    FIRST_SEEN{"Container<br/>baru?"}
+    INIT_STATE["Init freeze state:<br/>is_frozen = False<br/>frozen_at = None<br/>last_activity = now"]
+    FIRST_RET(["Return False"])
 
-    IS_FROZEN{"State:<br/>sudah frozen?"}
+    IS_FROZEN{"is_frozen<br/>== True?"}
 
-    subgraph FROZEN_CHECK["Container Sudah Frozen"]
-        CALC_DURATION["frozen_duration_ms =<br/>(now - frozen_at) × 1000"]
-        DURATION_EXCEEDED{"duration ≥<br/>MAX_FREEZE_MS (1000ms)?"}
-        FORCE_THAW["_thaw(id, reason=max_duration_reached)<br/>Tulis '0' ke cgroup.freeze"]
-        THAW_RET(["Return: action=thaw<br/>reason=max_duration"])
-        STILL_FROZEN(["Return: action=none<br/>reason=already_frozen"])
-    end
+    CALC_DURATION["duration = now - frozen_at"]
+    DURATION_EXCEEDED{"duration<br/>≥ 1000ms?"}
+    FORCE_THAW["Force Thaw:<br/>Tulis 0 ke cgroup.freeze<br/>is_frozen = False"]
+    STILL_FROZEN(["Return True<br/>(Keep frozen)"])
 
-    CALC_IDLE["idle_duration = now - last_activity"]
+    CALC_IDLE["idle_time = now - last_activity"]
 
-    subgraph IDLE_DETECT["Event-Driven Idle Detection"]
-        CHECK_POPULATED["_check_populated(id)<br/>Baca cgroup.events: 'populated X'"]
-        POPULATED_AVAIL{"cgroup.events<br/>available?"}
-        
-        KERNEL_ACTIVE{"populated = 1?<br/>(kernel says processes active)"}
-        NOT_IDLE(["Return: action=none<br/>reason=populated_active"])
-        
-        KERNEL_IDLE{"idle_duration ≥<br/>IDLE_TRIGGER (2.0s)?"}
-        TOO_RECENT1(["Return: action=none<br/>reason=depopulated_but_too_recent"])
-        
-        FALLBACK_CHECK{"Fallback: idle_duration ≥<br/>IDLE_TRIGGER (2.0s)?"}
-        TOO_RECENT2(["Return: action=none<br/>reason=not_idle_enough"])
-    end
+    POPULATED_AVAIL{"cgroup.events<br/>bisa dibaca?"}
+    KERNEL_ACTIVE{"populated == 1?"}
+    NOT_IDLE["Update last_activity = now"]
+    KERNEL_IDLE{"idle_time<br/>≥ 2000ms?"}
+    TOO_RECENT1(["Return False<br/>(Wait longer)"])
+    
+    FALLBACK_CHECK{"idle_time<br/>≥ 2000ms?"}
+    TOO_RECENT2(["Return False<br/>(Wait longer)"])
 
-    subgraph SAFETY["Safety Check Sebelum Freeze"]
-        EBPF_CHECK{"eBPF sensor tersedia<br/>DAN container punya<br/>open connections?"}
-        DEFER(["Return: action=defer<br/>reason=open_connections<br/>(transaksi DB belum selesai)"])
-    end
+    EBPF_CHECK{"Cek eBPF:<br/>Ada tx aktif?"}
+    DEFER(["Return False<br/>(Safety defer)"])
 
-    subgraph DO_FREEZE["Eksekusi Freeze"]
-        FIND_PATH["Cari cgroup.freeze path"]
-        IS_DRY{"DRY_RUN?"}
-        DRY_LOG["[DRY-RUN] Log saja"]
-        WRITE_FREEZE["Tulis '1' ke cgroup.freeze<br/>Container CPU → 0%"]
-        UPDATE_STATE["state.frozen = True<br/>state.frozen_at = now"]
-        FREEZE_RET(["Return: action=freeze<br/>reason=idle:X.Xs"])
-    end
+    FIND_PATH["Resolusi cgroup path"]
+
+    IS_DRY{"is_dry_run?"}
+    DRY_LOG["Log 'Would freeze...'"]
+    WRITE_FREEZE["Tulis 1 ke cgroup.freeze"]
+    UPDATE_STATE["Update state:<br/>is_frozen = True<br/>frozen_at = now"]
+    FREEZE_RET(["Return True"])
 
     START --> IS_PRIORITY
     IS_PRIORITY -->|Ya| EXEMPT
@@ -66,26 +55,24 @@ flowchart TD
 
     IS_FROZEN -->|Ya| CALC_DURATION
     CALC_DURATION --> DURATION_EXCEEDED
-    DURATION_EXCEEDED -->|Ya, ≥ 1000ms| FORCE_THAW
-    FORCE_THAW --> THAW_RET
+    DURATION_EXCEEDED -->|"Ya (≥ 1000ms)"| FORCE_THAW
     DURATION_EXCEEDED -->|Tidak| STILL_FROZEN
 
     IS_FROZEN -->|Tidak| CALC_IDLE
-    CALC_IDLE --> CHECK_POPULATED
-    CHECK_POPULATED --> POPULATED_AVAIL
+    CALC_IDLE --> POPULATED_AVAIL
 
     POPULATED_AVAIL -->|Ya| KERNEL_ACTIVE
-    KERNEL_ACTIVE -->|Ya, active| NOT_IDLE
-    KERNEL_ACTIVE -->|Tidak, depopulated| KERNEL_IDLE
-    KERNEL_IDLE -->|Tidak, < 2s| TOO_RECENT1
-    KERNEL_IDLE -->|Ya, ≥ 2s| EBPF_CHECK
+    KERNEL_ACTIVE -->|"Ya"| NOT_IDLE
+    KERNEL_ACTIVE -->|"Tidak"| KERNEL_IDLE
+    KERNEL_IDLE -->|"Tidak (< 2s)"| TOO_RECENT1
+    KERNEL_IDLE -->|"Ya (≥ 2s)"| EBPF_CHECK
 
     POPULATED_AVAIL -->|Tidak| FALLBACK_CHECK
-    FALLBACK_CHECK -->|Tidak, < 2s| TOO_RECENT2
-    FALLBACK_CHECK -->|Ya, ≥ 2s| EBPF_CHECK
+    FALLBACK_CHECK -->|"Tidak (< 2s)"| TOO_RECENT2
+    FALLBACK_CHECK -->|"Ya (≥ 2s)"| EBPF_CHECK
 
-    EBPF_CHECK -->|Ya, ada transaksi| DEFER
-    EBPF_CHECK -->|Tidak, aman| FIND_PATH
+    EBPF_CHECK -->|Ya| DEFER
+    EBPF_CHECK -->|Tidak| FIND_PATH
 
     FIND_PATH --> IS_DRY
     IS_DRY -->|Ya| DRY_LOG
@@ -95,7 +82,8 @@ flowchart TD
     UPDATE_STATE --> FREEZE_RET
 ```
 
-### Mengapa Ini Inovasi S2?
+## Mengapa Ini Inovasi S2?
+
 1. **Event-Driven vs Polling:** Idle detection menggunakan sinyal kernel (`cgroup.events populated=0`) — bukan polling CPU%. Ini menghilangkan false-idle dan false-active antar interval sampling.
 2. **Literal 0% CPU:** Tidak ada teknik cgroups throttling yang bisa mencapai 0% CPU. Hanya `cgroup.freeze` yang bisa — dan ini eksklusif cgroups v2.
 3. **Safety Gate (eBPF):** Sebelum freeze, mengecek apakah ada transaksi database yang belum selesai. Mencegah data corruption.
@@ -103,55 +91,55 @@ flowchart TD
 
 ---
 
-## Deskripsi Alur Berbasis Bisnis/Akademik
+## Alur Logika Konseptual
 
 ```mermaid
 flowchart TD
-    START(["Evaluasi Kelayakan Micro-Freeze"])
+    START(["Evaluasi Micro-Freeze"])
 
-    PENTING{"Validasi Prioritas<br/>Target Container?"}
-    TIDAK_BOLEH(["❌ Eksekusi Ditolak<br/>(Bypass: Layanan Kritikal / Tier-0)"])
+    PENTING{"Validasi Prioritas?"}
+    TIDAK_BOLEH(["❌ Bypass: Tier-0"])
 
-    BARU{"Status Tracking<br/>Initial (New)?"}
-    CATAT_BARU["Inisialisasi State Tracking<br/>(Insufficient Data)"]
-    PERTAMA_SELESAI(["Tunda eksekusi ke siklus (t+1)"])
+    BARU{"Tracking Initial?"}
+    CATAT_BARU["Inisialisasi State Tracking"]
+    PERTAMA_SELESAI(["Tunda ke siklus (t+1)"])
 
-    SUDAH_BEKU{"Status Aktif ==<br/>FROZEN?"}
+    SUDAH_BEKU{"Status FROZEN?"}
 
     subgraph CEK_DURASI["Fase Evaluasi Durasi Freeze"]
-        BERAPA_LAMA["Kalkulasi Durasi Freeze Aktual<br/>(Δt = Waktu Sekarang - Waktu Freeze)"]
-        TERLALU_LAMA{"Durasi > Ambang Batas<br/>Maksimal (1000ms)?"}
-        BANGUNKAN["⏰ Inisiasi Force-Thaw (Unfreeze)<br/>(Mitigasi risiko koneksi TCP putus)"]
-        MASIH_OK(["Durasi Optimal<br/>(Pertahankan status FROZEN)"])
+        BERAPA_LAMA["Hitung Durasi Freeze (Δt)"]
+        TERLALU_LAMA{"Durasi > 1000ms?"}
+        BANGUNKAN["⏰ Force-Thaw (Unfreeze)"]
+        MASIH_OK(["Pertahankan FROZEN"])
     end
 
-    HITUNG_IDLE["Kalkulasi Durasi Idle (Δt sejak aktivitas terakhir)"]
+    HITUNG_IDLE["Hitung Durasi Idle (Δt)"]
 
-    subgraph DETEKSI["Fase Deteksi Idle Berbasis Event (Kernel-Level)"]
-        TANYA_KERNEL["Interogasi cgroup.events:<br/>Sinyal 'populated' dari Kernel"]
-        BISA_TANYA{"Integritas<br/>cgroup v2?"}
+    subgraph DETEKSI["Fase Deteksi Idle (Kernel-Level)"]
+        TANYA_KERNEL["Cek cgroup.events 'populated'"]
+        BISA_TANYA{"cgroup v2 support?"}
 
-        AKTIF{"Sinyal 'populated' == 1?<br/>(Terdapat proses aktif)"}
-        BELUM_IDLE(["Container Aktif: Abort Freeze"])
+        AKTIF{"populated == 1?"}
+        BELUM_IDLE(["Container Aktif → Abort"])
 
-        CUKUP_LAMA{"Durasi Idle ≥<br/>Trigger Threshold (2000ms)?"}
-        BARU_SAJA(["Transisi terlalu dini<br/>(Risiko False-Idle)"])
+        CUKUP_LAMA{"Idle ≥ 2000ms?"}
+        BARU_SAJA(["False-Idle Risk → Abort"])
 
-        FALLBACK{"Fallback (Polling):<br/>Durasi Idle ≥ Threshold?"}
-        BARU_SAJA2(["Transisi terlalu dini<br/>(Risiko False-Idle)"])
+        FALLBACK{"Polling: Idle ≥ Threshold?"}
+        BARU_SAJA2(["False-Idle Risk → Abort"])
     end
 
-    subgraph KEAMANAN["Fase Verifikasi Safety Gate (eBPF)"]
-        CEK_TRANSAKSI{"Monitoring Koneksi Terbuka:<br/>Terdapat Transaksi Aktif?"}
-        TUNDA(["⏸️ Defer Eksekusi<br/>(Menghindari korupsi data / interupsi I/O)"])
+    subgraph KEAMANAN["Fase Safety Gate (eBPF)"]
+        CEK_TRANSAKSI{"Ada transaksi<br/>aktif terbuka?"}
+        TUNDA(["⏸️ Defer Eksekusi (Mencegah I/O corrupt)"])
     end
 
-    subgraph BEKUKAN["Fase Eksekusi State Mutation"]
-        SIMULASI{"Dry-Run<br/>Mode?"}
-        CATAT_SAJA["Log Eksekusi Saja (Simulasi)"]
-        TULIS_BEKU["❄️ Inisiasi Freeze (Commit):<br/>Tulis '1' ke cgroup.freeze<br/>(Reduksi CPU → 0% seketika<br/>dengan Resume Latency < 1ms)"]
-        TANDAI["Perbarui Tracking State = FROZEN"]
-        BEKU_SELESAI(["Siklus Freeze Selesai<br/>(Energi Berhasil Dihemat)"])
+    subgraph BEKUKAN["Fase Eksekusi State"]
+        SIMULASI{"Dry-Run Mode?"}
+        CATAT_SAJA["Log Eksekusi Saja"]
+        TULIS_BEKU["❄️ Inisiasi Freeze (Commit 1 ke cgroup.freeze)"]
+        TANDAI["Update Tracking State = FROZEN"]
+        BEKU_SELESAI(["Siklus Freeze Selesai"])
     end
 
     START --> PENTING
@@ -171,17 +159,17 @@ flowchart TD
     TANYA_KERNEL --> BISA_TANYA
 
     BISA_TANYA -->|Ya| AKTIF
-    AKTIF -->|Ya (Aktif)| BELUM_IDLE
-    AKTIF -->|Tidak (Idle)| CUKUP_LAMA
-    CUKUP_LAMA -->|Belum| BARU_SAJA
-    CUKUP_LAMA -->|Sudah| CEK_TRANSAKSI
+    AKTIF -->|"Ya"| BELUM_IDLE
+    AKTIF -->|"Tidak"| CUKUP_LAMA
+    CUKUP_LAMA -->|"Belum"| BARU_SAJA
+    CUKUP_LAMA -->|"Sudah"| CEK_TRANSAKSI
 
     BISA_TANYA -->|Tidak| FALLBACK
-    FALLBACK -->|Belum| BARU_SAJA2
-    FALLBACK -->|Sudah| CEK_TRANSAKSI
+    FALLBACK -->|"Belum"| BARU_SAJA2
+    FALLBACK -->|"Sudah"| CEK_TRANSAKSI
 
-    CEK_TRANSAKSI -->|Ya, Terbuka| TUNDA
-    CEK_TRANSAKSI -->|Tidak, Aman| SIMULASI
+    CEK_TRANSAKSI -->|Ya| TUNDA
+    CEK_TRANSAKSI -->|Tidak| SIMULASI
 
     SIMULASI -->|Ya| CATAT_SAJA
     SIMULASI -->|Tidak| TULIS_BEKU

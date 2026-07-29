@@ -1,102 +1,100 @@
-# Flowchart — profile_host()
+# Flowchart — Profiler.profile_host() (Layer 1)
 
-> **Kode Sumber:** `framework/profiler.py` → fungsi `profile_host()` (baris 20–91)
-> **Posisi di Diagram:** Layer 1 — Environment Profiler
-> **Kategori:** Tools / Data Acquisition (S1)
+> **Kode Sumber:** `framework/profiler.py` → class `EnvironmentProfiler`, fungsi `profile_host()` (baris 35–88)
+> **Posisi di Diagram:** Layer 1 — Environment Profiler → Host Detection
+> **Kategori:** 🛠️ TOOLS & INFRASTRUKTUR (S1)
 
-Fungsi ini berjalan **sekali saat cold-start**. Membaca kapasitas hardware host dan menginisialisasi sensor daya.
+Sistem profilasi otomatis. Menghindari hardcoding parameter. Mendeteksi topologi CPU dan memori secara dinamis agar model estimasi energi bisa melakukan self-calibration sesuai server tempat HECF dijalankan (mendukung portabilitas).
 
 ```mermaid
 flowchart TD
-    START(["profile_host() dipanggil saat cold-start"])
+    START(["profile_host()"])
 
-    READ_CPU["Baca /proc/cpuinfo<br/>Hitung jumlah baris 'processor'"]
-    CPU_FAIL{"OSError?"}
-    CPU_FALLBACK["Fallback: os.cpu_count()"]
-    CPU_OK["cpu_count = jumlah core"]
+    CPU_TRY["Deteksi Core:<br/>baca /sys/devices/system/cpu/online"]
+    CPU_ERR{"I/O Error?"}
+    CPU_FALLBACK["Fallback:<br/>os.cpu_count()"]
+    CPU_OK["Simpan host_cores"]
 
-    READ_MEM["Baca /proc/meminfo<br/>Cari baris 'MemTotal'"]
-    MEM_OK["mem_total_mb = MemTotal / 1024"]
+    RAM_TRY["Deteksi RAM:<br/>baca MemTotal dari /proc/meminfo"]
+    RAM_OK["Simpan host_ram"]
 
-    CALC_POWER["Hitung konstanta daya dinamis:<br/>P_idle = cpu_count × 3.75 W<br/>P_max = cpu_count × 13.5 W"]
+    ENERGY_CONST["Set konstanta linear power model:<br/>p_idle = core_count × 3.75W<br/>p_max = core_count × 13.5W"]
 
-    HW_SENSOR["Inisialisasi PowerSensor()<br/><i>hardware_sensor.py</i>"]
-    HW_CHECK{"Sensor tersedia?<br/>(Intel RAPL / AMD hwmon)"}
-    HW_YES["hw_sensor.available = True<br/>Mode: Hardware-True"]
-    HW_NO["hw_sensor.available = False<br/>Mode: Software Estimation"]
+    RAPL_CHECK["Deteksi Hardware Sensor:<br/>cek /sys/class/powercap/intel-rapl"]
+    RAPL_FOUND{"Sensor ada?"}
+    RAPL_YES["Set hw_sensor_available = True"]
+    RAPL_NO["Set hw_sensor_available = False"]
 
-    VERIFY_PROC["Verifikasi /proc Host:<br/>cpu_count == os.cpu_count()?"]
-    PROC_MATCH{"Cocok?"}
-    PROC_OK["✅ /proc verification PASSED"]
-    PROC_FAIL["⚠ CRITICAL: /proc MISMATCH<br/>Kemungkinan membaca /proc<br/>container sendiri, bukan host"]
+    NS_CHECK["Validasi Namespace:<br/>baca /proc/1/cgroup"]
+    NS_MATCH{"Sesuai?"}
+    NS_WARN["Log Warning: Namespace mismatch!"]
+    NS_OK["Log Info: Namespace OK"]
 
-    CHECK_CONNTRACK["Baca /proc/sys/net/netfilter/<br/>nf_conntrack_max"]
-    CT_CHECK{"≥ 65536?"}
-    CT_OK["✅ conntrack check PASSED"]
-    CT_WARN["⚠ WARNING: koneksi baru<br/>bisa di-drop saat traffic spike"]
+    NET_CHECK["Deteksi Batas Netfilter:<br/>baca nf_conntrack_max"]
+    NET_WARN{"nf_conntrack_max<br/>< 131072?"}
+    WARN_LOG["Log Warning: Risiko packet drop"]
+    NET_OK["Log Info: Conntrack OK"]
 
-    RETURN(["Return profile dict:<br/>hostname, cpu_count, mem_total_mb,<br/>p_idle_watts, p_max_watts, hw_sensor"])
+    RETURN(["Return dict(host_cores, host_ram, dll)"])
 
-    START --> READ_CPU
-    READ_CPU --> CPU_FAIL
-    CPU_FAIL -->|Ya| CPU_FALLBACK
-    CPU_FAIL -->|Tidak| CPU_OK
-    CPU_FALLBACK --> READ_MEM
-    CPU_OK --> READ_MEM
-    READ_MEM --> MEM_OK
-    MEM_OK --> CALC_POWER
-    CALC_POWER --> HW_SENSOR
-    HW_SENSOR --> HW_CHECK
-    HW_CHECK -->|Ya| HW_YES
-    HW_CHECK -->|Tidak| HW_NO
-    HW_YES --> VERIFY_PROC
-    HW_NO --> VERIFY_PROC
-    VERIFY_PROC --> PROC_MATCH
-    PROC_MATCH -->|Ya| PROC_OK
-    PROC_MATCH -->|Tidak| PROC_FAIL
-    PROC_OK --> CHECK_CONNTRACK
-    PROC_FAIL --> CHECK_CONNTRACK
-    CHECK_CONNTRACK --> CT_CHECK
-    CT_CHECK -->|Ya| CT_OK
-    CT_CHECK -->|Tidak| CT_WARN
-    CT_OK --> RETURN
-    CT_WARN --> RETURN
+    START --> CPU_TRY
+    CPU_TRY --> CPU_ERR
+    CPU_ERR -->|Ya| CPU_FALLBACK
+    CPU_ERR -->|Tidak| CPU_OK
+    CPU_FALLBACK --> RAM_TRY
+    CPU_OK --> RAM_TRY
+    RAM_TRY --> RAM_OK
+    RAM_OK --> ENERGY_CONST
+    ENERGY_CONST --> RAPL_CHECK
+    RAPL_CHECK --> RAPL_FOUND
+    RAPL_FOUND -->|Ya| RAPL_YES
+    RAPL_FOUND -->|Tidak| RAPL_NO
+    RAPL_YES --> NS_CHECK
+    RAPL_NO --> NS_CHECK
+    NS_CHECK --> NS_MATCH
+    NS_MATCH -->|Tidak| NS_WARN
+    NS_MATCH -->|Ya| NS_OK
+    NS_WARN --> NET_CHECK
+    NS_OK --> NET_CHECK
+    NET_CHECK --> NET_WARN
+    NET_WARN -->|Ya| WARN_LOG
+    NET_WARN -->|Tidak| NET_OK
+    WARN_LOG --> RETURN
+    NET_OK --> RETURN
 ```
 
----
-
-## Deskripsi Alur Berbasis Bisnis/Akademik
+## Alur Logika Konseptual
 
 ```mermaid
 flowchart TD
-    START(["Inisialisasi Sistem (Cold-Start)"])
+    START(["Host Profiling (Cold-Start)"])
 
-    CEK_CPU["Deteksi Topologi CPU:<br/>Hitung jumlah logical processor pada host"]
+    CEK_CPU["Deteksi Topologi CPU (Logical Processors)"]
     CPU_GAGAL{"Eksekusi<br/>Gagal?"}
-    CPU_CADANGAN["Fallback: Kalkulasi alternatif<br/>menggunakan API sistem operasi"]
-    CPU_DAPAT["Kapasitas CPU (core_count) terverifikasi"]
+    CPU_CADANGAN["Fallback: API OS (os.cpu_count)"]
+    CPU_DAPAT["Host Cores terverifikasi"]
 
-    CEK_RAM["Deteksi Kapasitas Memori:<br/>Evaluasi total RAM pada host"]
-    RAM_DAPAT["Kapasitas Memori terverifikasi"]
+    CEK_RAM["Deteksi Kapasitas RAM"]
+    RAM_DAPAT["Host RAM terverifikasi"]
 
-    HITUNG_DAYA["Kalkulasi Konstanta Estimasi Daya:<br/>• Baseline Idle (P_idle) = core_count × 3.75 Watt<br/>• Kapasitas Maksimal (P_max) = core_count × 13.5 Watt"]
+    HITUNG_DAYA["Kalkulasi Konstanta Estimasi Daya:<br/>• Baseline (P_idle) = cores × 3.75W<br/>• Max (P_max) = cores × 13.5W"]
 
-    CEK_SENSOR["Deteksi Sensor Daya Perangkat Keras:<br/>(Eksplorasi modul Intel RAPL / AMD hwmon)"]
+    CEK_SENSOR["Deteksi Hardware Sensor (RAPL/hwmon)"]
     SENSOR_ADA{"Sensor<br/>Tersedia?"}
-    SENSOR_YA["✅ Mode Hardware-True:<br/>Pengukuran daya riil teraktivasi"]
-    SENSOR_TIDAK["⚠ Sensor Absen:<br/>Mode Software Estimation teraktivasi"]
+    SENSOR_YA["✅ Mode Hardware-True"]
+    SENSOR_TIDAK["⚠ Fallback: Software Estimation"]
 
-    CEK_ASLI["Verifikasi Integritas File Sistem (/proc):<br/>Validasi namespace mount point"]
-    ASLI{"Kesesuaian<br/>Data?"}
-    ASLI_OK["✅ Validasi Namespace Berhasil"]
-    ASLI_GAGAL["⚠ PERINGATAN KRITIS: Inkonsistensi Namespace!<br/>Indikasi isolasi file sistem parsial"]
+    CEK_ASLI["Verifikasi Cgroup Namespace (/proc/1/cgroup)"]
+    ASLI{"Sesuai?"}
+    ASLI_OK["✅ Validasi Namespace Sukses"]
+    ASLI_GAGAL["⚠ Peringatan: Inkonsistensi Namespace"]
 
-    CEK_JARINGAN["Verifikasi Kapasitas Koneksi (Conntrack):<br/>Evaluasi batas netfilter pada kernel"]
+    CEK_JARINGAN["Verifikasi Kapasitas nf_conntrack"]
     JARINGAN{"Kapasitas<br/>Memadai?"}
     JARINGAN_OK["✅ Kapasitas Conntrack Memadai"]
-    JARINGAN_WARN["⚠ PERINGATAN: Kapasitas Terbatas!<br/>Risiko packet drop pada trafik tinggi"]
+    JARINGAN_WARN["⚠ Peringatan: Risiko packet drop"]
 
-    SELESAI(["Profil Konfigurasi Host Terbentuk<br/>Sistem siap beroperasi"])
+    SELESAI(["Profil Host Terbentuk (Ready)"])
 
     START --> CEK_CPU
     CEK_CPU --> CPU_GAGAL

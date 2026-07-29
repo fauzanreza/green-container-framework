@@ -73,49 +73,49 @@ flowchart TB
 
 ---
 
-## Versi Bahasa Sehari-hari
+## Alur Logika Konseptual
 
 ```mermaid
 flowchart TB
-    subgraph INFRA["Peralatan yang Digunakan HECF"]
+    subgraph INFRA["Technology Stack & Infrastructure Tools"]
         direction TB
 
-        subgraph APPS["3 Aplikasi yang Berjalan di Docker"]
-            MESIN["<b>Mesin HECF</b><br/>Otak utama yang mengatur<br/>semua container lain"]
-            LAYAR["<b>Dashboard HECF</b><br/>Layar pemantauan web<br/>untuk melihat hasil"]
-            BENCHMARK["<b>Aplikasi Uji Coba</b><br/>Aplikasi web dummy untuk<br/>diuji beban kinerjanya"]
+        subgraph APPS["Docker Container Services"]
+            MESIN["<b>HECF Engine</b><br/>Otak utama pengontrol (Privileged)"]
+            LAYAR["<b>HECF Dashboard</b><br/>Web Interface (Gunicorn/Flask)"]
+            BENCHMARK["<b>HttpArena Target</b><br/>Aplikasi beban uji coba"]
         end
 
-        subgraph FILE["File Komunikasi (cara aplikasi berbicara satu sama lain)"]
-            LAPORAN["File Laporan Metrik<br/>(data CPU, RAM, energi)"]
-            DAFTAR["Daftar Container<br/>yang ingin dipantau"]
-            PRIORITAS["Daftar Prioritas<br/>(mana yang penting)"]
+        subgraph FILE["Inter-Process Communication (Shared Volumes)"]
+            LAPORAN["Metrics Report (metrics.csv)"]
+            DAFTAR["Target Configuration (targets.json)"]
+            PRIORITAS["Priority Map (priority_map.json)"]
         end
 
-        subgraph OS["Sistem Operasi Linux"]
-            PENGATUR["Pengatur Sumber Daya<br/>(tempat baca/tulis batas CPU & RAM)"]
-            INFO["Informasi Hardware<br/>(jumlah prosesor, total RAM)"]
-            LISTRIK["Sensor Listrik<br/>(jika ada di motherboard)"]
-            DOCKER_API["Docker<br/>(manajer container)"]
+        subgraph OS["Linux Kernel & Hardware APIs"]
+            PENGATUR["cgroupfs Interface<br/>(CPU & RAM Quota I/O)"]
+            INFO["sysfs & procfs<br/>(Topologi Hardware)"]
+            LISTRIK["RAPL/Hwmon<br/>(Sensor Daya Silikon)"]
+            DOCKER_API["Docker Daemon<br/>(Container Runtime API)"]
         end
 
-        subgraph PENGUJI["Alat Penguji Beban"]
-            LOCUST["Locust<br/>Mensimulasikan ribuan<br/>pengunjung web sekaligus"]
+        subgraph PENGUJI["Load Generation"]
+            LOCUST["Locust Test Suite<br/>(Simulasi HTTP Traffic)"]
         end
 
-        MESIN -->|"Tulis"| LAPORAN
-        MESIN -->|"Baca"| DAFTAR
-        MESIN -->|"Baca"| PRIORITAS
+        MESIN -->|"Write"| LAPORAN
+        MESIN -->|"Read"| DAFTAR
+        MESIN -->|"Read"| PRIORITAS
 
-        LAYAR -->|"Baca"| LAPORAN
-        LAYAR -->|"Baca/Tulis"| DAFTAR
-        LAYAR -->|"Baca/Tulis"| PRIORITAS
+        LAYAR -->|"Read"| LAPORAN
+        LAYAR -->|"Read/Write"| DAFTAR
+        LAYAR -->|"Read/Write"| PRIORITAS
 
-        MESIN <-->|"Tanya daftar container"| DOCKER_API
-        MESIN <-->|"Baca & tulis batas"| PENGATUR
-        MESIN -->|"Baca info server"| INFO
-        MESIN -->|"Baca konsumsi listrik"| LISTRIK
+        MESIN <-->|"Query Container List"| DOCKER_API
+        MESIN <-->|"Read/Write Quota"| PENGATUR
+        MESIN -->|"Read Host Profile"| INFO
+        MESIN -->|"Read Power Metrics"| LISTRIK
 
-        LOCUST -->|"Kirim permintaan web"| BENCHMARK
+        LOCUST -->|"Inject HTTP Requests"| BENCHMARK
     end
 ```

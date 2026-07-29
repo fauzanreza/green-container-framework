@@ -10,38 +10,38 @@ Algoritma **Reactive Debouncing** menggunakan Rolling Boolean Array. Mengevaluas
 flowchart TD
     START(["Guardrail.update(container_name, cpu, mem, ema_pred, cgroup_path)"])
 
-    EMA_CHECK{"ema_pred<br/>disediakan?<br/>(hanya mode full_hecf)"}
+    EMA_CHECK{"ema_pred<br/>tersedia?"}
     
-    EMA_ZONE{"ema_pred ≥<br/>(CPU_THRESHOLD - PRE_WARNING_MARGIN)?<br/>Contoh: ema ≥ 75% jika threshold=80%, margin=5%"}
-    LOWER_THRESH["cpu_thresh = CPU_THRESHOLD - PRE_WARNING_MARGIN<br/><b>= 75%</b> (EMA-adjusted, lebih sensitif)"]
-    NORMAL_THRESH["cpu_thresh = CPU_THRESHOLD<br/><b>= 80%</b> (default)"]
+    EMA_ZONE{"ema_pred ≥<br/>warning_zone?<br/>e.g. ≥ 75%"}
+    LOWER_THRESH["cpu_thresh = 75%<br/>(EMA-adjusted)"]
+    NORMAL_THRESH["cpu_thresh = 80%<br/>(default)"]
 
-    EVAL_OVER["Evaluasi kondisi overload:<br/>is_over = (cpu > cpu_thresh) OR (mem > RAM_THRESHOLD 90%)"]
+    EVAL_OVER["Evaluasi overload:<br/>is_over = cpu > thresh OR mem > 90%"]
 
-    APPEND["Tambahkan is_over ke rolling history<br/>(boolean array, max = GUARDRAIL_WINDOW = 5)"]
+    APPEND["Append is_over ke rolling history<br/>(boolean array, max 5)"]
 
     TRIM{"len(history)<br/>> 5?"}
-    POP["Hapus elemen tertua<br/>history.pop(0)"]
+    POP["Pop elemen tertua"]
 
-    COUNT["trigger_count = Σ(True) dalam history"]
+    COUNT["trigger_count = Σ(True)"]
 
-    TRIGGERED{"trigger_count<br/>≥ GUARDRAIL_TRIGGER_COUNT?<br/>(default: ≥ 3 dari 5)"}
+    TRIGGERED{"trigger_count<br/>≥ 3?"}
 
-    NOT_TRIGGERED(["Return False<br/>(Guardrail TIDAK aktif —<br/>beban masih aman)"])
+    NOT_TRIGGERED(["Return False<br/>(Guardrail OFF)"])
 
-    CHECK_PSI{"PSI_ENABLED<br/>dan cgroup_path<br/>tersedia?"}
-    READ_PSI["Baca cpu.pressure<br/>Parse 'some avg10=X.XX'"]
-    PSI_HIGH{"psi_avg10 ><br/>PSI_THRESHOLD (25.0)?"}
-    PSI_ELEVATED["Catat GUARDRAIL+PSI<br/>(tingkat kepercayaan tinggi)"]
-    PSI_NORMAL["Catat GUARDRAIL biasa"]
+    CHECK_PSI{"PSI_ENABLED<br/>& cgroup_path?"}
+    READ_PSI["Baca cpu.pressure<br/>Parse avg10"]
+    PSI_HIGH{"psi_avg10 ><br/>25.0?"}
+    PSI_ELEVATED["Log GUARDRAIL+PSI<br/>(high confidence)"]
+    PSI_NORMAL["Log GUARDRAIL"]
 
-    RETURN_TRUE(["Return True<br/>(Guardrail AKTIF —<br/>intervensi darurat diperlukan)"])
+    RETURN_TRUE(["Return True<br/>(Guardrail ON)"])
 
     START --> EMA_CHECK
     EMA_CHECK -->|Tidak| NORMAL_THRESH
     EMA_CHECK -->|Ya| EMA_ZONE
-    EMA_ZONE -->|Ya, mendekati threshold| LOWER_THRESH
-    EMA_ZONE -->|Tidak, masih jauh| NORMAL_THRESH
+    EMA_ZONE -->|Ya| LOWER_THRESH
+    EMA_ZONE -->|Tidak| NORMAL_THRESH
 
     LOWER_THRESH --> EVAL_OVER
     NORMAL_THRESH --> EVAL_OVER
@@ -53,8 +53,8 @@ flowchart TD
     POP --> COUNT
 
     COUNT --> TRIGGERED
-    TRIGGERED -->|Tidak, < 3 dari 5| NOT_TRIGGERED
-    TRIGGERED -->|Ya, ≥ 3 dari 5| CHECK_PSI
+    TRIGGERED -->|"Tidak (< 3)"| NOT_TRIGGERED
+    TRIGGERED -->|"Ya (≥ 3)"| CHECK_PSI
 
     CHECK_PSI -->|Tidak| PSI_NORMAL
     CHECK_PSI -->|Ya| READ_PSI
@@ -66,44 +66,45 @@ flowchart TD
     PSI_NORMAL --> RETURN_TRUE
 ```
 
-### Mengapa Ini Inovasi S2?
+## Mengapa Ini Inovasi S2?
+
 1. **Rolling Boolean Array (3-of-5):** Bukan sekadar `if cpu > 80%`. Algoritma ini mengevaluasi pola temporal — hanya memicu intervensi jika anomali **persisten**, bukan sesaat.
 2. **EMA-Adjusted Threshold:** Threshold bergeser secara proaktif berdasarkan prediksi EMA dari Layer 3C. Ini adalah integrasi antar-algoritma (prediktif → reaktif).
 3. **PSI Confirmation Signal:** Menggunakan sinyal *Pressure Stall Information* dari kernel Linux sebagai variabel konfirmasi tambahan, meningkatkan akurasi keputusan.
 
 ---
 
-## Deskripsi Alur Berbasis Bisnis/Akademik
+## Alur Logika Konseptual
 
 ```mermaid
 flowchart TD
-    START(["Evaluasi Status Kritis (Overload Detection)"])
+    START(["Overload Detection"])
 
-    PREDIKSI{"Integrasi Prediktor<br/>(EMA) Aktif?"}
-    MENDEKATI{"Prediksi utilisasi<br/>mendekati ambang batas<br/>(Threshold)?"}
-    BATAS_RENDAH["Reduksi Threshold Proaktif<br/>(Tingkatkan sensitivitas respons Guardrail)"]
-    BATAS_NORMAL["Terapkan Threshold Standar"]
+    PREDIKSI{"EMA Prediktor<br/>aktif?"}
+    MENDEKATI{"Prediksi mendekati<br/>threshold?"}
+    BATAS_RENDAH["Turunkan threshold<br/>(lebih sensitif)"]
+    BATAS_NORMAL["Threshold standar"]
 
-    CEK["Evaluasi Matriks Utilisasi:<br/>Apakah CPU ATAU Memori<br/>melampaui ambang batas?"]
+    CEK["Evaluasi utilisasi:<br/>CPU atau Memori > threshold?"]
 
-    CATAT["Agregasi State (Rolling History):<br/>(Simpan ke buffer boolean 5-sampel)"]
+    CATAT["Simpan ke rolling history<br/>(buffer boolean, 5 sampel)"]
 
-    PENUH{"Buffer<br/>Penuh (>5)?"}
-    BUANG["Eviksi state terlama (FIFO)"]
+    PENUH{"Buffer > 5?"}
+    BUANG["Hapus entry terlama (FIFO)"]
 
-    HITUNG["Kalkulasi Bobot Anomali:<br/>Σ(State Overload) dalam buffer"]
+    HITUNG["Hitung Σ overload dalam buffer"]
 
-    DARURAT{"Bobot Anomali<br/>≥ 3 dari 5?"}
+    DARURAT{"Overload<br/>≥ 3 dari 5?"}
 
-    AMAN(["✅ Status Aman (Nominal)<br/>(Anomali sesaat/Transient Spike)"])
+    AMAN(["✅ Normal<br/>(transient spike)"])
 
-    CEK_PSI{"Kompatibilitas<br/>Pressure Stall Info (PSI)?"}
-    BACA_PSI["Akuisisi Sinyal Tekanan (Stall)<br/>dari Kernel Linux"]
-    PSI_TINGGI{"Stall Rate<br/>Tinggi?"}
-    SANGAT_DARURAT["🚨 KONDISI KRITIS (High Confidence)<br/>(Validasi silang PSI positif)"]
-    DARURAT_BIASA["🚨 KONDISI DARURAT<br/>(Beban berlebih persisten)"]
+    CEK_PSI{"PSI<br/>tersedia?"}
+    BACA_PSI["Baca sinyal stall dari kernel"]
+    PSI_TINGGI{"Stall rate<br/>tinggi?"}
+    SANGAT_DARURAT["🚨 Kritis (high confidence)<br/>PSI terkonfirmasi"]
+    DARURAT_BIASA["🚨 Darurat<br/>(overload persisten)"]
 
-    AKTIF(["Tindakan Preventif (Guardrail) AKTIF<br/>(Restriksi CPU diinisiasi untuk mencegah Starvation)"])
+    AKTIF(["Guardrail AKTIF → Restriksi CPU"])
 
     START --> PREDIKSI
     PREDIKSI -->|Tidak| BATAS_NORMAL
@@ -120,8 +121,8 @@ flowchart TD
     BUANG --> HITUNG
 
     HITUNG --> DARURAT
-    DARURAT -->|Tidak (< 3)| AMAN
-    DARURAT -->|Ya (≥ 3)| CEK_PSI
+    DARURAT -->|"Tidak (< 3)"| AMAN
+    DARURAT -->|"Ya (≥ 3)"| CEK_PSI
 
     CEK_PSI -->|Tidak| DARURAT_BIASA
     CEK_PSI -->|Ya| BACA_PSI

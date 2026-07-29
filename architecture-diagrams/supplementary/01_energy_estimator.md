@@ -1,91 +1,83 @@
-# Flowchart — Hybrid Energy Estimator
+# Flowchart — EnergyEstimator.get_energy() (Supplementary)
 
-> **Kode Sumber:** `framework/energy.py` → fungsi `estimate_power()` (baris 7–21), `estimate_energy()` (baris 24–26), `estimate_all()` (baris 29–36)
-> **Posisi di Diagram:** Supplementary Services → Energy Estimator
-> **Kategori:** 🌟 INOVASI MODEL MATEMATIKA (S2)
+> **Kode Sumber:** `framework/energy.py` → class `EnergyEstimator`, fungsi `get_container_energy()` (baris 30–75)
+> **Posisi di Diagram:** Supplementary Services → Estimator Konsumsi Daya
+> **Kategori:** 🌟 INOVASI ALGORITMA (S2)
 
-Model **Hybrid Hardware/Software Energy Estimation** dengan algoritma **Proportional Power Apportionment** untuk mengalokasikan konsumsi daya total host ke masing-masing container secara proporsional.
+Model hibrida cerdas (Smart Hybrid Model) yang dapat menukar metode pengukuran daya (fisik vs estimasi perangkat lunak) secara dinamis, mengalokasikan (apportionment) daya tingkat host ke kontainer individu, dan mengintegrasikan daya (Watt) seiring waktu menjadi energi murni (kWh).
 
 ```mermaid
 flowchart TD
-    START(["estimate_power(cpu%, p_idle, p_max, hw_power, cpu_count)"])
+    START(["get_container_energy(container, cpu_pct, elapsed)"])
 
-    HW_CHECK{"hw_power tersedia<br/>DAN hw_power > 0?<br/>(sensor hardware aktif)"}
+    HW_CHECK{"Hardware Sensor<br/>(RAPL/hwmon)<br/>Aktif?"}
+    HW_TOTAL["Baca daya host aktual (Watt)"]
+    HW_FRAC["Kalkulasi fraksi CPU:<br/>cpu_pct / (core_count × 100)"]
+    HW_ALLOC["Alokasikan daya:<br/>Daya Container = host_watt × fraksi"]
 
-    subgraph TIER_A["Tier A — Hardware-True Mode"]
-        HW_TOTAL["Total daya REAL dari sensor<br/>hw_power = ΔJoules / ΔTime (Watt)"]
-        CALC_FRACTION["fraction = cpu% / (cpu_count × 100)<br/>Contoh: 25% / (4 × 100) = 0.0625"]
-        CALC_HW_POWER["<b>Proportional Power Apportionment:</b><br/>Container_Power = hw_power × fraction<br/>Contoh: 45W × 0.0625 = 2.8125W"]
-    end
+    SW_UTIL["Hitung utilisasi termodulasi:<br/>util = cpu_pct / (core_count × 100)"]
+    SW_MODEL["Model Linier (Jarus et al.):<br/>Daya = P_idle + (P_max - P_idle) × util"]
 
-    subgraph TIER_B["Tier B — Software Estimation Mode"]
-        SW_UTIL["utilization = cpu% / 100<br/>Contoh: 25% → 0.25"]
-        CALC_SW_POWER["<b>Linear CPU-to-Power Model</b><br/>(Jarus et al., 2014, error < 4%):<br/><br/>P(t) = P_idle + (P_max - P_idle) × utilization<br/><br/>Contoh (4-core host):<br/>P = 15.0 + (54.0 - 15.0) × 0.25<br/>P = 15.0 + 9.75 = <b>24.75 W</b>"]
-        SW_NOTE["P_idle dan P_max dihitung dinamis:<br/>P_idle = cpu_count × 3.75W<br/>P_max = cpu_count × 13.5W"]
-    end
+    POWER_RES["power_w = Daya Kontainer (Watt)"]
 
-    POWER_RESULT["power_watt = hasil perhitungan"]
+    CALC_ENERGY["Integrasi ke kWh:<br/>energy_kwh = power_w × elapsed / 3,600,000"]
 
-    ENERGY(["estimate_energy(power_watt, duration_seconds)"])
-    CALC_ENERGY["<b>Energy = Power × Time / 3,600,000</b><br/><br/>E(kWh) = P(W) × t(s) / 3,600,000<br/><br/>Contoh: 24.75W × 30s / 3,600,000<br/>= 0.000000206 kWh"]
-
-    RETURN(["Return:<br/>power_watt, energy_kwh<br/>(Tidak ada konversi karbon/CO2e)"])
+    RETURN(["Return (power_w, energy_kwh)"])
 
     START --> HW_CHECK
-    HW_CHECK -->|Ya, sensor tersedia| HW_TOTAL
-    HW_TOTAL --> CALC_FRACTION
-    CALC_FRACTION --> CALC_HW_POWER
-    CALC_HW_POWER --> POWER_RESULT
+    HW_CHECK -->|"Ya (Sensor Fisik)"| HW_TOTAL
+    HW_TOTAL --> HW_FRAC
+    HW_FRAC --> HW_ALLOC
+    HW_ALLOC --> POWER_RES
 
-    HW_CHECK -->|Tidak, fallback software| SW_UTIL
-    SW_UTIL --> CALC_SW_POWER
-    CALC_SW_POWER --> SW_NOTE
-    SW_NOTE --> POWER_RESULT
+    HW_CHECK -->|"Tidak (Fallback)"| SW_UTIL
+    SW_UTIL --> SW_MODEL
+    SW_MODEL --> POWER_RES
 
-    POWER_RESULT --> ENERGY
-    ENERGY --> CALC_ENERGY
+    POWER_RES --> CALC_ENERGY
     CALC_ENERGY --> RETURN
 ```
 
-### Mengapa Ini Inovasi S2?
+## Mengapa Ini Inovasi S2?
+
 1. **Hybrid Adaptive Model:** Secara otomatis mendeteksi dan memilih mode terbaik (hardware atau software) tanpa konfigurasi manual.
 2. **Proportional Power Apportionment:** Sensor hardware hanya melaporkan total daya CPU package. Algoritma ini secara matematis membagi total tersebut ke setiap container berdasarkan proporsi penggunaan CPU mereka.
 3. **Self-Calibrating:** P_idle dan P_max bukan konstanta tetap — mereka dihitung secara dinamis dari jumlah core fisik host, sehingga model skala otomatis dari 2-core hingga 16-core.
 
 ---
 
-## Deskripsi Alur Berbasis Bisnis/Akademik
+## Alur Logika Konseptual
 
 ```mermaid
 flowchart TD
-    START(["Estimasi Konsumsi Energi Container"])
+    START(["Estimasi Energi Container"])
 
-    SENSOR{"Validasi Hardware:<br/>Sensor Daya Fisik<br/>(Sysfs) Terdeteksi?"}
+    SENSOR{"Sensor Hardware<br/>(Sysfs) Aktif?"}
 
     subgraph CARA_A["Mode A — Pengukuran Hardware (Hardware-True)"]
-        BACA_TOTAL["Akuisisi Daya Total Host (Package Power)<br/>berdasarkan metrik fisik aktual"]
-        HITUNG_BAGIAN["Kalkulasi Proporsi CPU (Fraction):<br/>Utilisasi CPU Target ÷ Total Kapasitas CPU Host<br/>(Misal: 25% CPU pada Host 4-Core = 25% ÷ 400% = 0.0625)"]
-        DAYA_HW["Alokasi Daya Proporsional (Apportionment):<br/>Daya Container = Daya Total Host × Proporsi CPU<br/>(Misal: 45 W × 0.0625 = 2.81 Watt)"]
+        BACA_TOTAL["Baca Package Power Host (aktual)"]
+        HITUNG_BAGIAN["Hitung Proporsi CPU (Fraction):<br/>CPU Container ÷ Total CPU Host"]
+        DAYA_HW["Alokasi Daya (Apportionment):<br/>Daya Container = Daya Host × Proporsi CPU"]
     end
 
     subgraph CARA_B["Mode B — Pemodelan Software (Software Estimation)"]
-        PERKIRAAN["Terapkan Linear Power Model<br/>(Berdasarkan Jarus et al., 2014):<br/><br/>P(t) = P_idle + (P_max - P_idle) × Utilisasi<br/><br/>Contoh:<br/>15.0 W + (54.0 - 15.0) × 0.25<br/>= 15.0 + 9.75 = 24.75 Watt"]
-        CATATAN["Parameter P_idle dan P_max dikalibrasi<br/>secara dinamis sesuai topologi core CPU host"]
+        PERKIRAAN["Terapkan Linear Power Model:<br/>P(t) = P_idle + (P_max - P_idle) × Util"]
+        CATATAN["P_idle & P_max dikalibrasi dinamis<br/>sesuai topologi CPU host"]
     end
 
-    DAYA["Hasil Estimasi Daya (Watt) Terkonsolidasi"]
+    DAYA["Konsolidasi Daya (Watt)"]
 
-    ENERGI["Kalkulasi Energi Akumulatif (Integration over time):<br/>E (kWh) = Daya (W) × Waktu (s) / 3,600,000<br/><br/>Contoh: 24.75 W × 30s / 3,600,000<br/>= 0.000000206 kWh"]
+    ENERGI["Integrasi ke Energi (kWh):<br/>E (kWh) = Daya (W) × Waktu (s) / 3.6e6"]
 
-    HASIL(["Return Metadata Metrik:<br/>• Instantaneous Power (Watt)<br/>• Akumulasi Energi (kWh)"])
+    HASIL(["Return Metadata:<br/>• Instantaneous Power (W)<br/>• Energi (kWh)"])
 
     START --> SENSOR
-    SENSOR -->|Ya, Sensor Fisik| BACA_TOTAL
+    SENSOR -->|"Ya (Hardware)"| BACA_TOTAL
     BACA_TOTAL --> HITUNG_BAGIAN
     HITUNG_BAGIAN --> DAYA_HW
     DAYA_HW --> DAYA
 
-    SENSOR -->|Tidak, Fallback| PERKIRAAN
+    SENSOR -->|"Tidak (Software)"| PERKIRAAN
     PERKIRAAN --> CATATAN
     CATATAN --> DAYA
 

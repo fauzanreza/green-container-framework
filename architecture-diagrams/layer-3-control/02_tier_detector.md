@@ -8,47 +8,47 @@ Algoritma **Statistical Volatility Classification** menggunakan rasio persentil 
 
 ```mermaid
 flowchart TD
-    START(["TierDetector — dipanggil setiap polling cycle per container"])
+    START(["TierDetector (per container)"])
 
-    ADD["add_sample(container_name, cpu)<br/>Tambahkan nilai CPU ke sliding window"]
-    TRIM{"len(window)<br/>> TIER_WINDOW (120)?"}
-    POP["window.pop(0)<br/>Hapus sampel tertua"]
+    ADD["add_sample(cpu)<br/>Append ke sliding window"]
+    TRIM{"len(window)<br/>> 120?"}
+    POP["window.pop(0)"]
 
     GET_TIER(["get_tier(container_name)"])
 
-    COLD{"len(window)<br/>< COLD_START_SAMPLES (30)?"}
-    COLD_FALLBACK["Return Tier 2 (Balanced)<br/>Data belum cukup untuk klasifikasi"]
+    COLD{"len(window)<br/>< 30?"}
+    COLD_FALLBACK["Return Tier 2<br/>(Insufficient data)"]
 
-    CALC_P50["p50 = numpy.percentile(window, 50)<br/><i>Median — beban tipikal</i>"]
-    CALC_P95["p95 = numpy.percentile(window, 95)<br/><i>Ekor atas — beban puncak/spike</i>"]
+    CALC_P50["p50 = numpy.percentile(window, 50)<br/><i>Median</i>"]
+    CALC_P95["p95 = numpy.percentile(window, 95)<br/><i>Spike</i>"]
 
-    P50_ZERO{"p50 ≤ 0?<br/>(container idle)"}
-    IDLE_SOFT["Return Tier 3 (Soft)<br/>Container nyaris idle"]
+    P50_ZERO{"p50 ≤ 0?<br/>(idle)"}
+    IDLE_SOFT["Return Tier 3 (Soft)"]
 
     CALC_RATIO["spike_ratio = p95 / p50"]
 
-    CLASSIFY{"Klasifikasi<br/>berdasarkan spike_ratio"}
-    TIER1["raw_tier = 1 (Aggressive)<br/>spike_ratio > 2.0<br/><i>Beban sangat fluktuatif</i>"]
-    TIER2["raw_tier = 2 (Balanced)<br/>1.5 ≤ spike_ratio ≤ 2.0<br/><i>Beban moderat</i>"]
-    TIER3["raw_tier = 3 (Soft)<br/>spike_ratio < 1.5<br/><i>Beban stabil/rendah</i>"]
+    CLASSIFY{"Klasifikasi<br/>spike_ratio"}
+    TIER1["raw_tier = 1 (Aggressive)<br/>spike_ratio > 2.0"]
+    TIER2["raw_tier = 2 (Balanced)<br/>1.5 ≤ spike_ratio ≤ 2.0"]
+    TIER3["raw_tier = 3 (Soft)<br/>spike_ratio < 1.5"]
 
-    HYST_INIT{"Pertama kali<br/>untuk container ini?"}
-    INIT_STATE["Inisialisasi hysteresis state:<br/>current = raw_tier<br/>pending = raw_tier<br/>count = HYSTERESIS_SAMPLES"]
+    HYST_INIT{"State = Null?"}
+    INIT_STATE["Init hysteresis state:<br/>current = raw_tier<br/>pending = raw_tier<br/>count = 3"]
     RETURN_RAW(["Return raw_tier"])
 
     SAME_CURRENT{"raw_tier ==<br/>state.current?"}
     RESET_PENDING["Reset pending transition<br/>count = 0"]
-    RETURN_CURRENT1(["Return state.current<br/>(tier tetap stabil)"])
+    RETURN_CURRENT1(["Return state.current"])
 
     SAME_PENDING{"raw_tier ==<br/>state.pending?"}
     INC_COUNT["state.count += 1"]
-    COUNT_MET{"count ≥<br/>HYSTERESIS_SAMPLES (3)?"}
-    COMMIT["✅ COMMIT tier transition:<br/>state.current = raw_tier<br/>count = 0"]
-    RETURN_NEW(["Return raw_tier baru"])
-    HOLD(["Return state.current<br/>(tahan tier lama,<br/>transisi belum stabil)"])
+    COUNT_MET{"count ≥ 3?"}
+    COMMIT["✅ Commit transisi tier:<br/>state.current = raw_tier<br/>count = 0"]
+    RETURN_NEW(["Return raw_tier (baru)"])
+    HOLD(["Return state.current<br/>(Hold)"])
 
-    NEW_PENDING["Tier pending baru berbeda<br/>state.pending = raw_tier<br/>state.count = 1"]
-    RETURN_HOLD(["Return state.current<br/>(tahan tier lama)"])
+    NEW_PENDING["state.pending = raw_tier<br/>state.count = 1"]
+    RETURN_HOLD(["Return state.current<br/>(Hold)"])
 
     START --> ADD
     ADD --> TRIM
@@ -57,8 +57,8 @@ flowchart TD
     POP --> GET_TIER
 
     GET_TIER --> COLD
-    COLD -->|Ya, < 30 sampel| COLD_FALLBACK
-    COLD -->|Tidak, ≥ 30 sampel| CALC_P50
+    COLD -->|"Ya (< 30)"| COLD_FALLBACK
+    COLD -->|"Tidak (≥ 30)"| CALC_P50
 
     CALC_P50 --> CALC_P95
     CALC_P95 --> P50_ZERO
@@ -66,9 +66,9 @@ flowchart TD
     P50_ZERO -->|Tidak| CALC_RATIO
     CALC_RATIO --> CLASSIFY
 
-    CLASSIFY -->|ratio > 2.0| TIER1
-    CLASSIFY -->|1.5 ≤ ratio ≤ 2.0| TIER2
-    CLASSIFY -->|ratio < 1.5| TIER3
+    CLASSIFY -->|"ratio > 2.0"| TIER1
+    CLASSIFY -->|"1.5 ≤ ratio ≤ 2.0"| TIER2
+    CLASSIFY -->|"ratio < 1.5"| TIER3
 
     TIER1 --> HYST_INIT
     TIER2 --> HYST_INIT
@@ -84,56 +84,57 @@ flowchart TD
     SAME_CURRENT -->|Tidak| SAME_PENDING
     SAME_PENDING -->|Ya| INC_COUNT
     INC_COUNT --> COUNT_MET
-    COUNT_MET -->|Ya, ≥ 3 kali berturut| COMMIT
+    COUNT_MET -->|"Ya (≥ 3)"| COMMIT
     COMMIT --> RETURN_NEW
     COUNT_MET -->|Tidak| HOLD
 
-    SAME_PENDING -->|Tidak, tier lain lagi| NEW_PENDING
+    SAME_PENDING -->|Tidak| NEW_PENDING
     NEW_PENDING --> RETURN_HOLD
 ```
 
-### Mengapa Ini Inovasi S2?
+## Mengapa Ini Inovasi S2?
+
 1. **P95/P50 Spike Ratio:** Bukan menggunakan rata-rata (mean) yang sensitif terhadap outlier. Rasio persentil ini adalah metode statistik robust untuk mendeteksi *burstiness* beban kerja web secara real-time.
 2. **Sliding Window 120 Sampel:** Memberikan konteks historis yang cukup panjang tanpa mengonsumsi memori berlebih.
 3. **Hysteresis (3 sampel stabil):** Algoritma anti-osilasi dari teori kontrol — tier baru hanya di-commit jika konsisten selama 3 evaluasi berturut-turut. Mencegah *flapping* yang menyebabkan overhead percuma.
 
 ---
 
-## Deskripsi Alur Berbasis Bisnis/Akademik
+## Alur Logika Konseptual
 
 ```mermaid
 flowchart TD
-    START(["Klasifikasi Volatilitas Beban (Tiering)"])
+    START(["Klasifikasi Volatilitas (Tiering)"])
 
-    SIMPAN["Agregasi Sampel CPU (Sliding Window):<br/>(Buffer historis maksimum 120 observasi)"]
-    TERLALU_BANYAK{"Ukuran Buffer<br/>> 120?"}
+    SIMPAN["Agregasi CPU (Sliding Window, max 120)"]
+    TERLALU_BANYAK{"Size > 120?"}
     HAPUS_LAMA["Eviksi data terlama (FIFO)"]
 
-    TENTUKAN(["Fase Evaluasi Volatilitas"])
+    TENTUKAN(["Evaluasi Volatilitas"])
 
-    CUKUP_DATA{"Jumlah Sampel<br/>≥ 30?"}
-    BELUM_CUKUP["Sampel Inadekuat:<br/>Fallback ke Tier 2 (Balanced / Default Aman)"]
+    CUKUP_DATA{"Sampel ≥ 30?"}
+    BELUM_CUKUP["Fallback Tier 2<br/>(Insufficient data)"]
 
-    IDLE{"Deteksi Status Idle?"}
-    MODE_SANTAI["Kondisi Idle:<br/>Terapkan Tier 3 (Soft)"]
+    IDLE{"Deteksi Idle?"}
+    MODE_SANTAI["Terapkan Tier 3 (Soft)"]
 
-    BANDINGKAN["Kalkulasi Distribusi Statistik:<br/>• Baseline Beban (Median / P50)<br/>• Beban Puncak (Persentil 95 / P95)"]
-    RASIO["Kalkulasi Rasio Volatilitas (Spike Ratio):<br/>P95 ÷ P50"]
+    BANDINGKAN["Kalkulasi Statistik:<br/>P50 (Median) & P95 (Spike)"]
+    RASIO["Kalkulasi Spike Ratio:<br/>P95 ÷ P50"]
 
-    KATEGORI{"Klasifikasi Rasio<br/>(Ambang Batas)?"}
-    MELONJAK["Rasio > 2.0 (Spike Ekstrem) →<br/>Tier 1 (Aggressive)"]
-    SEDANG["1.5 ≤ Rasio ≤ 2.0 (Fluktuasi Moderat) →<br/>Tier 2 (Balanced)"]
-    STABIL["Rasio < 1.5 (Beban Stabil) →<br/>Tier 3 (Soft)"]
+    KATEGORI{"Klasifikasi Rasio"}
+    MELONJAK["Rasio > 2.0 → Tier 1 (Aggressive)"]
+    SEDANG["1.5 ≤ Rasio ≤ 2.0 → Tier 2 (Balanced)"]
+    STABIL["Rasio < 1.5 → Tier 3 (Soft)"]
 
-    PERTAMA{"Inisialisasi Pertama<br/>(Initial State)?"}
-    LANGSUNG["Terapkan Klasifikasi Awal"]
+    PERTAMA{"Initial State?"}
+    LANGSUNG["Terapkan Tier Awal"]
 
-    SAMA{"Klasifikasi Baru ==<br/>State Aktif (Current Tier)?"}
-    TETAP["State Stabil (Tidak ada transisi)"]
+    SAMA{"New Tier == Current Tier?"}
+    TETAP["State Stabil"]
 
-    KONSISTEN{"Mekanisme Hysteresis:<br/>Klasifikasi konsisten selama 3 siklus?"}
-    UBAH["✅ Transisi Divalidasi (Commit):<br/>Mutasi State ke Tier Baru"]
-    TAHAN["Transisi Ditunda (Hold):<br/>Fase Hysteresis belum terpenuhi"]
+    KONSISTEN{"Hysteresis Check:<br/>Konsisten 3 siklus?"}
+    UBAH["✅ Commit Tier Baru"]
+    TAHAN["Hold (Transisi ditunda)"]
 
     START --> SIMPAN
     SIMPAN --> TERLALU_BANYAK
@@ -142,8 +143,8 @@ flowchart TD
     HAPUS_LAMA --> TENTUKAN
 
     TENTUKAN --> CUKUP_DATA
-    CUKUP_DATA -->|Belum| BELUM_CUKUP
-    CUKUP_DATA -->|Sudah| IDLE
+    CUKUP_DATA -->|Tidak| BELUM_CUKUP
+    CUKUP_DATA -->|Ya| IDLE
     IDLE -->|Ya| MODE_SANTAI
     IDLE -->|Tidak| BANDINGKAN
     BANDINGKAN --> RASIO
@@ -161,6 +162,6 @@ flowchart TD
     PERTAMA -->|Tidak| SAMA
     SAMA -->|Ya| TETAP
     SAMA -->|Tidak| KONSISTEN
-    KONSISTEN -->|Ya (3 siklus)| UBAH
-    KONSISTEN -->|Belum (Hold)| TAHAN
+    KONSISTEN -->|"Ya (3 siklus)"| UBAH
+    KONSISTEN -->|"Belum (Hold)"| TAHAN
 ```
