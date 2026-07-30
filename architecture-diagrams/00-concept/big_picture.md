@@ -51,7 +51,7 @@ flowchart TB
 ## Penjelasan Alur MAPE-K
 
 | Fase MAPE-K | Layer | Fungsi |
-|---|---|---|
+| --- | --- | --- |
 | **Monitor** | Layer 1 + Layer 2 | Deteksi hardware, discover container, baca metrik CPU/MEM dari cgroupfs |
 | **Analyze** | Layer 3B + 3C | Klasifikasi volatilitas (P95/P50), prediksi tren (EMA) |
 | **Plan** | Layer 3A | Guardrail menentukan apakah perlu intervensi darurat |

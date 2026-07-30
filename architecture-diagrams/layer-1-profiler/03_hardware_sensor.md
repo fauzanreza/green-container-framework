@@ -48,29 +48,29 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    START(["Akuisisi Metrik Daya Host"])
+    START(["START: Akuisisi Metrik Daya Host"])
 
-    CEK_STATUS{"Sensor Aktif?"}
-    LEWATI(["Abort: Gunakan Software Model"])
+    CEK_STATUS{"Apakah Sensor<br/>Power Aktif?"}
+    SELESAI_LEWAT(["END: Abort, Gunakan Software Model"])
 
     subgraph INTEL["Jalur Intel RAPL"]
         BACA_INTEL["Baca register energy_uj"]
-        STATUS_INTEL{"I/O Sukses?"}
+        STATUS_INTEL{"Apakah Pembacaan<br/>I/O Sukses?"}
         HITUNG_INTEL["Konversi Microjoules → Watt (Δ / waktu)"]
     end
 
     subgraph AMD_GENERIC["Jalur HWMON (AMD / Universal)"]
         BACA_AMD["Baca register power1_input"]
-        STATUS_AMD{"I/O Sukses?"}
+        STATUS_AMD{"Apakah Pembacaan<br/>I/O Sukses?"}
         HITUNG_AMD["Konversi Microwatts → Watt"]
     end
 
     GAGAL["Hardware Error: Kembalikan None"]
 
-    HASIL(["Return True Power (Watt)"])
+    SELESAI(["END: Return True Power (Watt)"])
 
     START --> CEK_STATUS
-    CEK_STATUS -->|Tidak| LEWATI
+    CEK_STATUS -->|Tidak| SELESAI_LEWAT
     CEK_STATUS -->|Ya| BACA_INTEL
 
     BACA_INTEL --> STATUS_INTEL
@@ -81,7 +81,7 @@ flowchart TD
     STATUS_AMD -->|Ya| HITUNG_AMD
     STATUS_AMD -->|Tidak| GAGAL
 
-    HITUNG_INTEL --> HASIL
-    HITUNG_AMD --> HASIL
-    GAGAL --> LEWATI
+    HITUNG_INTEL --> SELESAI
+    HITUNG_AMD --> SELESAI
+    GAGAL --> SELESAI_LEWAT
 ```

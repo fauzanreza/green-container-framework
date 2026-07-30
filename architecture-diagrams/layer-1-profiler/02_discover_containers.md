@@ -100,35 +100,35 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    START(["Service Discovery"])
+    START(["START: Service Discovery"])
 
     HUBUNGI["Fetch Docker API container_list"]
-    GAGAL{"API Error?"}
-    KOSONG["Abort: Return Empty List"]
+    GAGAL{"Apakah Terjadi<br/>API Error?"}
+    KOSONG(["END: Abort, Return Empty List"])
 
     BACA_PENGATURAN["Load Config:<br/>Priority Map & Target List"]
 
     PERIKSA(["Iterasi Container Target"])
 
-    DIRI_SENDIRI{"Is Self-Instance<br/>(HECF Engine)?"}
+    DIRI_SENDIRI{"Apakah Self-Instance<br/>(HECF Engine)?"}
     LEWAT1["Bypass: Hindari Self-Control"]
 
-    DILARANG{"In Exclusion List?"}
+    DILARANG{"Apakah Masuk<br/>Exclusion List?"}
     LEWAT2["Bypass: Infrastruktur Kritis"]
 
     CEK_PORT["Inspeksi Port Binding"]
-    PORT_BAHAYA{"Expose DB Ports?<br/>(3306, 5432, dll)"}
+    PORT_BAHAYA{"Apakah Expose DB Ports?<br/>(3306, 5432, dll)"}
     LEWAT3["Bypass: Hindari I/O Corrupt"]
 
-    PORT_WEB{"Expose Web Ports?<br/>(80, 443, dll)"}
+    PORT_WEB{"Apakah Expose Web Ports?<br/>(80, 443, dll)"}
     PENTING_WEB["Set Prio: Web Service"]
 
-    CEK_SETTING{"Ada Manual Priority?"}
+    CEK_SETTING{"Apakah Ada<br/>Manual Priority?"}
     PAKAI_MANUAL["Apply Manual Weight"]
-    CEK_LABEL{"Ada Label Priority?"}
+    CEK_LABEL{"Apakah Ada<br/>Label Priority?"}
     PAKAI_LABEL["Apply Label Weight"]
 
-    CEK_NAMA{"Nama cocok Regex Infra<br/>(nginx/traefik)?"}
+    CEK_NAMA{"Apakah Nama Cocok Regex Infra<br/>(nginx/traefik)?"}
     PENTING_INFRA["Set Prio: Network Infra"]
 
     MASUKKAN["Register ke Inventaris"]
@@ -137,11 +137,11 @@ flowchart TD
 
     TULIS["Sync ke targets.json (Dashboard)"]
 
-    CEK_WHITELIST{"Whitelist Mode Aktif?"}
+    CEK_WHITELIST{"Apakah Whitelist Mode<br/>Aktif?"}
     WHITELIST["Apply Whitelist Filter"]
     SEMUA["Promiscuous Mode (All)"]
 
-    SELESAI(["Return Filtered Targets"])
+    SELESAI(["END: Return Filtered Targets"])
 
     START --> HUBUNGI
     HUBUNGI --> GAGAL

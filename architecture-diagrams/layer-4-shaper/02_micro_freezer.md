@@ -95,85 +95,85 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    START(["Evaluasi Micro-Freeze"])
+    START(["START: Evaluasi Micro-Freeze"])
 
-    PENTING{"Validasi Prioritas?"}
-    TIDAK_BOLEH(["❌ Bypass: Tier-0"])
+    PENTING{"Apakah Prioritas<br/>Kritikal?"}
+    SELESAI_TIDAK_BOLEH(["END: ❌ Bypass (Tier-0)"])
 
-    BARU{"Tracking Initial?"}
+    BARU{"Apakah Tracking<br/>Initial (Baru)?"}
     CATAT_BARU["Inisialisasi State Tracking"]
-    PERTAMA_SELESAI(["Tunda ke siklus (t+1)"])
+    SELESAI_PERTAMA(["END: Tunda ke Siklus (t+1)"])
 
-    SUDAH_BEKU{"Status FROZEN?"}
+    SUDAH_BEKU{"Apakah Status<br/>Sudah FROZEN?"}
 
     subgraph CEK_DURASI["Fase Evaluasi Durasi Freeze"]
         BERAPA_LAMA["Hitung Durasi Freeze (Δt)"]
-        TERLALU_LAMA{"Durasi > 1000ms?"}
-        BANGUNKAN["⏰ Force-Thaw (Unfreeze)"]
-        MASIH_OK(["Pertahankan FROZEN"])
+        TERLALU_LAMA{"Apakah Durasi Freeze<br/>> 1000ms?"}
+        SELESAI_BANGUNKAN(["END: ⏰ Force-Thaw (Unfreeze)"])
+        SELESAI_MASIH_OK(["END: Pertahankan FROZEN"])
     end
 
     HITUNG_IDLE["Hitung Durasi Idle (Δt)"]
 
     subgraph DETEKSI["Fase Deteksi Idle (Kernel-Level)"]
         TANYA_KERNEL["Cek cgroup.events 'populated'"]
-        BISA_TANYA{"cgroup v2 support?"}
+        BISA_TANYA{"Apakah Host Mendukung<br/>cgroup v2?"}
 
-        AKTIF{"populated == 1?"}
-        BELUM_IDLE(["Container Aktif → Abort"])
+        AKTIF{"Apakah populated == 1?<br/>(Container Aktif)"}
+        SELESAI_BELUM_IDLE(["END: Container Aktif → Abort"])
 
-        CUKUP_LAMA{"Idle ≥ 2000ms?"}
-        BARU_SAJA(["False-Idle Risk → Abort"])
+        CUKUP_LAMA{"Apakah Idle Terjadi<br/>≥ 2000ms?"}
+        SELESAI_BARU_SAJA(["END: False-Idle Risk → Abort"])
 
-        FALLBACK{"Polling: Idle ≥ Threshold?"}
-        BARU_SAJA2(["False-Idle Risk → Abort"])
+        FALLBACK{"Apakah Polling Idle<br/>≥ Threshold?"}
+        SELESAI_BARU_SAJA2(["END: False-Idle Risk → Abort"])
     end
 
     subgraph KEAMANAN["Fase Safety Gate (eBPF)"]
-        CEK_TRANSAKSI{"Ada transaksi<br/>aktif terbuka?"}
-        TUNDA(["⏸️ Defer Eksekusi (Mencegah I/O corrupt)"])
+        CEK_TRANSAKSI{"Apakah Ada Transaksi DB<br/>Aktif Terbuka?"}
+        SELESAI_TUNDA(["END: ⏸️ Defer Eksekusi (Mencegah I/O Corrupt)"])
     end
 
     subgraph BEKUKAN["Fase Eksekusi State"]
-        SIMULASI{"Dry-Run Mode?"}
+        SIMULASI{"Apakah DRY_RUN<br/>Mode Aktif?"}
         CATAT_SAJA["Log Eksekusi Saja"]
         TULIS_BEKU["❄️ Inisiasi Freeze (Commit 1 ke cgroup.freeze)"]
         TANDAI["Update Tracking State = FROZEN"]
-        BEKU_SELESAI(["Siklus Freeze Selesai"])
+        SELESAI(["END: Siklus Freeze Selesai"])
     end
 
     START --> PENTING
-    PENTING -->|Ya| TIDAK_BOLEH
+    PENTING -->|Ya| SELESAI_TIDAK_BOLEH
     PENTING -->|Tidak| BARU
     BARU -->|Ya| CATAT_BARU
-    CATAT_BARU --> PERTAMA_SELESAI
+    CATAT_BARU --> SELESAI_PERTAMA
     BARU -->|Tidak| SUDAH_BEKU
 
     SUDAH_BEKU -->|Ya| BERAPA_LAMA
     BERAPA_LAMA --> TERLALU_LAMA
-    TERLALU_LAMA -->|Ya| BANGUNKAN
-    TERLALU_LAMA -->|Tidak| MASIH_OK
+    TERLALU_LAMA -->|Ya| SELESAI_BANGUNKAN
+    TERLALU_LAMA -->|Tidak| SELESAI_MASIH_OK
 
     SUDAH_BEKU -->|Tidak| HITUNG_IDLE
     HITUNG_IDLE --> TANYA_KERNEL
     TANYA_KERNEL --> BISA_TANYA
 
     BISA_TANYA -->|Ya| AKTIF
-    AKTIF -->|"Ya"| BELUM_IDLE
+    AKTIF -->|"Ya"| SELESAI_BELUM_IDLE
     AKTIF -->|"Tidak"| CUKUP_LAMA
-    CUKUP_LAMA -->|"Belum"| BARU_SAJA
+    CUKUP_LAMA -->|"Belum"| SELESAI_BARU_SAJA
     CUKUP_LAMA -->|"Sudah"| CEK_TRANSAKSI
 
     BISA_TANYA -->|Tidak| FALLBACK
-    FALLBACK -->|"Belum"| BARU_SAJA2
+    FALLBACK -->|"Belum"| SELESAI_BARU_SAJA2
     FALLBACK -->|"Sudah"| CEK_TRANSAKSI
 
-    CEK_TRANSAKSI -->|Ya| TUNDA
+    CEK_TRANSAKSI -->|Ya| SELESAI_TUNDA
     CEK_TRANSAKSI -->|Tidak| SIMULASI
 
     SIMULASI -->|Ya| CATAT_SAJA
     SIMULASI -->|Tidak| TULIS_BEKU
     CATAT_SAJA --> TANDAI
     TULIS_BEKU --> TANDAI
-    TANDAI --> BEKU_SELESAI
+    TANDAI --> SELESAI
 ```

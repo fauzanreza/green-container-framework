@@ -72,20 +72,20 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    START(["Pre-flight: Verifikasi TCP Backlog Host"])
+    START(["START: Pre-flight Verifikasi TCP Backlog Host"])
 
     BACA["Baca sysctl net.core.somaxconn"]
-    GAGAL{"I/O Error?"}
+    GAGAL{"Apakah Terjadi<br/>I/O Error?"}
     ASUMSI["Fallback: somaxconn = default OS"]
 
     HITUNG_PAKET["Hitung Expected Queue:<br/>Queue = RPS × Freeze Duration"]
     HITUNG_MINIMAL["Hitung Min Required:<br/>Min = Expected Queue × 2"]
 
-    CUKUP{"somaxconn<br/>≥ Min Required?"}
+    CUKUP{"Apakah somaxconn<br/>≥ Min Required?"}
     AMAN["✅ COMPLIANT: Kapasitas Host memadai"]
     BAHAYA["⚠ NON-COMPLIANT: Kapasitas terlalu rendah<br/>(Risiko TCP Drop)"]
 
-    SELESAI(["Return Status"])
+    SELESAI(["END: Return Status"])
 
     START --> BACA
     BACA --> GAGAL
@@ -104,23 +104,25 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    START2(["Verifikasi listen() backlog Aplikasi"])
+    START(["START: Verifikasi listen() backlog Aplikasi"])
 
     CARI_PROSES["Get PID utama container"]
-    KETEMU{"PID ada?"}
-    LEWATI(["Abort: Namespace Inaccessible"])
+    KETEMU{"Apakah PID<br/>Ditemukan?"}
+    LEWATI(["END: Abort, Namespace Inaccessible"])
 
     BACA_PINTU["Baca /proc/{pid}/net/tcp<br/>Cari status 0A (LISTEN)"]
-    ADA_PINTU{"Soket LISTEN<br/>ada?"}
-    TIDAK_ADA(["Abort: Tidak ada layanan network"])
+    ADA_PINTU{"Apakah Ada Soket<br/>Berstatus LISTEN?"}
+    TIDAK_ADA(["END: Abort, Tidak ada layanan network"])
 
     CARI_TERKECIL["Identifikasi tx_queue (backlog) terkecil"]
-    CUKUP{"Kapasitas<br/>≥ 128?"}
+    CUKUP{"Apakah Kapasitas<br/>≥ 128?"}
 
     APP_AMAN["✅ COMPLIANT: Backlog memadai"]
     APP_KECIL["⚠ NON-COMPLIANT: Parameter listen() terlalu kecil"]
 
-    START2 --> CARI_PROSES
+    SELESAI(["END: Return Status"])
+
+    START --> CARI_PROSES
     CARI_PROSES --> KETEMU
     KETEMU -->|Tidak| LEWATI
     KETEMU -->|Ya| BACA_PINTU
@@ -130,4 +132,7 @@ flowchart TD
     CARI_TERKECIL --> CUKUP
     CUKUP -->|Ya| APP_AMAN
     CUKUP -->|Tidak| APP_KECIL
+
+    APP_AMAN --> SELESAI
+    APP_KECIL --> SELESAI
 ```

@@ -50,9 +50,9 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    START(["Estimasi Energi Container"])
+    START(["START: Estimasi Energi Container"])
 
-    SENSOR{"Sensor Hardware<br/>(Sysfs) Aktif?"}
+    SENSOR{"Apakah Sensor Hardware<br/>(Sysfs) Aktif?"}
 
     subgraph CARA_A["Mode A — Pengukuran Hardware (Hardware-True)"]
         BACA_TOTAL["Baca Package Power Host (aktual)"]
@@ -69,7 +69,7 @@ flowchart TD
 
     ENERGI["Integrasi ke Energi (kWh):<br/>E (kWh) = Daya (W) × Waktu (s) / 3.6e6"]
 
-    HASIL(["Return Metadata:<br/>• Instantaneous Power (W)<br/>• Energi (kWh)"])
+    SELESAI(["END: Return Metadata (Power & Energy)"])
 
     START --> SENSOR
     SENSOR -->|"Ya (Hardware)"| BACA_TOTAL
@@ -82,5 +82,5 @@ flowchart TD
     CATATAN --> DAYA
 
     DAYA --> ENERGI
-    ENERGI --> HASIL
+    ENERGI --> SELESAI
 ```

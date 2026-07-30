@@ -72,44 +72,47 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    START(["Init Prediktor"])
+    START(["START: Inisialisasi Prediktor"])
 
-    PERTAMA{"Baseline (t=0)?"}
-    MULAI["Tidak ada data historis<br/>→ Prediksi = nilai aktual"]
-    HASIL_AWAL(["Return inisialisasi"])
-
-    AMBIL["Get state prediksi terakhir (t-1)"]
-    HITUNG["Hitung EMA:<br/>20% observasi aktual +<br/>80% historis terbobot<br/><br/>Bobot prioritas ke tren makro<br/>untuk reduksi sensitivitas<br/>terhadap transient spike"]
-    SIMPAN["Update state prediksi"]
-    HASIL(["Return forecast (t+1)"])
+    PERTAMA{"Container Baru?<br/>(Belum ada riwayat)"}
+    MULAI["Gunakan nilai CPU aktual<br/>sebagai nilai historis awal"]
+    
+    AMBIL["Ambil nilai prediksi<br/>sebelumnya Y(t-1)"]
+    HITUNG["Hitung EMA (Alpha = 0.2):<br/>20% nilai aktual saat ini +<br/>80% nilai historis terbobot"]
+    SIMPAN["Simpan Y(t) untuk siklus<br/>berikutnya"]
+    
+    SELESAI(["END: Kembalikan Prediksi Y(t)"])
 
     START --> PERTAMA
     PERTAMA -->|Ya| MULAI
-    MULAI --> HASIL_AWAL
+    MULAI --> SELESAI
     PERTAMA -->|Tidak| AMBIL
     AMBIL --> HITUNG
     HITUNG --> SIMPAN
-    SIMPAN --> HASIL
+    SIMPAN --> SELESAI
 ```
 
 ### Integrasi EMA → Guardrail
 
 ```mermaid
 flowchart TD
-    RAMALAN(["EMA Forecast"])
+    START(["START: Evaluasi Guardrail"])
 
-    KIRIM["Kirim prediksi ke Guardrail"]
+    KIRIM["Terima Prediksi EMA Y(t)"]
 
-    DEKAT{"Prediksi mendekati<br/>threshold?"}
-    SENSITIF["Guardrail lebih sensitif<br/>(threshold diturunkan)"]
-    BIASA["Guardrail normal"]
+    DEKAT{"Apakah Prediksi Y(t)<br/>mendekati Threshold<br/>(Masuk Warning Zone)?"}
+    SENSITIF["Tingkatkan Sensitivitas:<br/>Turunkan threshold Guardrail"]
+    BIASA["Gunakan threshold<br/>Guardrail normal"]
 
-    PAKAI(["Guardrail pakai<br/>threshold adjusted"])
+    PAKAI["Terapkan threshold untuk<br/>evaluasi 3-of-5 rule"]
+    
+    SELESAI(["END: Selesai Evaluasi"])
 
-    RAMALAN --> KIRIM
+    START --> KIRIM
     KIRIM --> DEKAT
     DEKAT -->|Ya| SENSITIF
     DEKAT -->|Tidak| BIASA
     SENSITIF --> PAKAI
     BIASA --> PAKAI
+    PAKAI --> SELESAI
 ```

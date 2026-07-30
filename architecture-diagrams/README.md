@@ -9,7 +9,7 @@ Setiap file `.md` mengandung Mermaid flowchart yang akurat berdasarkan kode sumb
 
 ## Struktur Direktori
 
-```
+```text
 architecture-diagrams/
 │
 ├── README.md                          ← File ini
@@ -46,7 +46,7 @@ architecture-diagrams/
 ## Kategori Klasifikasi
 
 | Kategori | Warna di Diagram | Deskripsi | Relevansi S2 |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | 🌟 **Inovasi Algoritma** | Layer 3 (oranye) + sebagian Layer 4 | Algoritma matematika & statistika yang menjadi kontribusi keilmuan tesis | **Core S2 thesis** |
 | 🛠️ **Tools / Engineering** | Layer 1 (biru), Layer 2 (hijau), Shaper | Infrastruktur teknis untuk mengumpulkan/mengeksekusi data | S1-level |
 | 📊 **Metodologi Evaluasi** | Supplementary, Locust, HttpArena | Instrumen pengujian hipotesis dan validasi statistik | Research Pipeline |

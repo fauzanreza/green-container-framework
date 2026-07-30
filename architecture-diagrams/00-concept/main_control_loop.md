@@ -133,44 +133,46 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    START(["Inisialisasi Sistem HECF"])
+    START(["START: Inisialisasi Sistem HECF"])
 
     INIT["Cold-Start Initialization:<br/>Host Profiling & Module Setup"]
 
-    LOOP(["Polling Cycle"])
+    LOOP(["Siklus Polling Dimulai (Mulai Loop)"])
 
     SLEEP["Adaptive Sleep Interval<br/>(10s atau 30s)"]
     DISCOVER["Service Discovery:<br/>Fetch Active Containers"]
-    ADA{"Target Valid<br/>Tersedia?"}
+    ADA{"Apakah Target Valid<br/>Tersedia?"}
     TUNGGU["Wait (Transisi ke siklus berikutnya)"]
 
-    PROSES(["Iterasi per Target Container:"])
+    PROSES(["Iterasi per Target Container"])
 
     BACA["Akuisisi Metrik Utilisasi<br/>(CPU & RAM %)"]
-    RUSAK{"Integritas<br/>Valid?"}
+    RUSAK{"Apakah Data Valid?<br/>(Bukan Stale Data)"}
     LEWAT["Abaikan (Container Terminated/Stale)"]
 
     KLASIFIKASI["Volatility Classification (Tiering):<br/>Evaluasi pola beban (Spiky/Stable)"]
     PREDIKSI["Trend Forecasting (EMA):<br/>Prediksi trayektori beban"]
-    DARURAT{"Guardrail Check:<br/>Persistent Overload Anomaly?"]
+    DARURAT{"Guardrail Check:<br/>Apakah Terjadi Persistent Overload?"]
 
     INTERVENSI["🚨 Preventative Action (Guardrail):<br/>Strict CPU Throttling (Anti-Starvation)"]
 
-    BEBAN{"Tingkat Volatilitas<br/>(P95/P50)?"}
+    BEBAN{"Bagaimana Tingkat<br/>Volatilitas (P95/P50)?"}
     AGRESIF["Tier 1 (Aggressive) →<br/>Strict CPU Quota"]
     SEIMBANG["Tier 2 (Balanced) →<br/>Moderate CPU Quota"]
     SANTAI["Tier 3 (Soft) →<br/>Unlimited (No Quota)"]
 
-    MENGANGGUR{"Idle Detection<br/>(Event-Driven)?"}
+    MENGANGGUR{"Apakah Container Idle?<br/>(Event-Driven)"}
     BEKUKAN["❄️ Execute Micro-Freeze<br/>(Reduksi CPU 0% State Preserved)"]
     TERAPKAN["Terapkan Resource Quota<br/>(Cgroups Writer)"]
 
     ENERGI["Power Apportionment (Estimasi Energi)"]
     CATAT["Agregasi Data Telemetri per Target"]
 
-    SELESAI["Iterasi Target Selesai"]
+    SELESAI_ITERASI["Iterasi Target Selesai"]
     SIMPAN["Atomic Write Telemetri ke Storage"]
     SESUAIKAN["Adaptive Sampling Adjustment:<br/>Reduksi interval saat beban tinggi"]
+    
+    SELESAI(["END: Siklus Berakhir, Kembali ke Awal"])
 
     START --> INIT
     INIT --> LOOP
@@ -206,10 +208,11 @@ flowchart TD
     ENERGI --> CATAT
 
     CATAT -->|Next Target| PROSES
-    CATAT -->|Completed| SELESAI
+    CATAT -->|Completed| SELESAI_ITERASI
     LEWAT -->|Next Target| PROSES
 
-    SELESAI --> SIMPAN
+    SELESAI_ITERASI --> SIMPAN
     SIMPAN --> SESUAIKAN
-    SESUAIKAN --> LOOP
+    SESUAIKAN --> SELESAI
+    SELESAI --> LOOP
 ```

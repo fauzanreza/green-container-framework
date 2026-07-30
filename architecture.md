@@ -1,4 +1,5 @@
 # Architecture & Technical Design Document
+
 ## Hybrid Energy-Aware Container Framework (HECF)
 
 **Status:** Final — Aligned to `PROPOSAL_THESIS_203012510019_V3`.
@@ -84,9 +85,9 @@ Runs at cold start to build a complete hardware and environment profile of the h
     from the Guardrail, to avoid data corruption from starved I/O.
   - `non-priority` — e.g. stateless web front-ends / static-file servers. Safe to
     throttle first and more aggressively under load.
-  - Implementation: **Dynamic Shared State** via `priority_map.json` (mounted as a 
-    Docker volume from the Dashboard UI), allowing on-the-fly priority changes without 
-    container restarts. Falls back to static Docker labels (`hecf.priority=high|low`) 
+  - Implementation: **Dynamic Shared State** via `priority_map.json` (mounted as a
+    Docker volume from the Dashboard UI), allowing on-the-fly priority changes without
+    container restarts. Falls back to static Docker labels (`hecf.priority=high|low`)
     if not defined in the JSON.
 - **Dynamic Target Management:** Layer 1 now supports a **whitelist-based scope model**
   via `targets.json` (shared volume, UI-editable):
@@ -115,11 +116,13 @@ Runs at cold start to build a complete hardware and environment profile of the h
 
 Reads CPU/Memory metrics **directly from cgroupfs (v2 unified hierarchy)**,
 bypassing the Docker REST API to minimize monitoring overhead:
+
 - CPU: `/sys/fs/cgroup/<container>/cpu.stat`
 - Memory: `/sys/fs/cgroup/<container>/memory.stat` (computes `actual = memory.current
   - inactive_file` to exclude reclaimable page-cache from RAM measurement).
 
 **Adaptive Sampling (proposal §3.2.3):**
+
 - If CPU utilization at `t-1` **> 60%** → poll every **10 seconds**
 - Otherwise → poll every **30 seconds**
 
@@ -150,7 +153,7 @@ The centralized decision layer combining reactive, analytic, and proactive contr
   - Computes `spike_ratio = P95 / P50` of CPU utilization via `numpy.percentile()`.
 
   | Tier | Label | Condition |
-  |------|-------|-----------|
+  | --- | --- | --- |
   | 1 | Aggressive | `spike_ratio > 2.0` |
   | 2 | Balanced | `1.5 ≤ spike_ratio ≤ 2.0` |
   | 3 | Soft | `spike_ratio < 1.5` |
@@ -176,13 +179,14 @@ Respects Layer 1's priority tagging: non-priority containers are throttled first
 and more aggressively; priority containers are shielded from hard caps.
 
 | Tier | Condition | Shaping behavior |
-|------|-----------|-------------------|
+| --- | --- | --- |
 | 1 – Aggressive | `spike_ratio > 2.0` | Hard CPU cap; non-priority containers throttled first |
 | 2 – Balanced | `1.5 ≤ spike_ratio ≤ 2.0` | Soft CPU cap; burst control with adaptive limit |
 | 3 – Soft | `spike_ratio < 1.5` | Minimal intervention; passive monitoring only |
 
 **Micro-Freezing (`framework/security/micro_freezer.py`):**
 Extends Layer 4 shaping with a sub-second, zero-CPU idle mechanism:
+
 - When a `non-priority` container has had no inbound activity for **≥2 seconds**,
   Layer 4 writes `1` to `cgroup.freeze`, dropping CPU usage to exactly **0%** while
   keeping the container fully resident in memory (no cold-start penalty).
@@ -217,7 +221,7 @@ If Layer 1's hardware sensor detection succeeds (Intel RAPL or AMD energy counte
 found), the estimator reads the actual Joules consumed from the motherboard register
 per sampling interval and calculates real-time Watts via:
 
-```
+```text
 Watts = ΔJoules / ΔTime
 ```
 
@@ -225,7 +229,7 @@ Because hardware sensors report total CPU package power (not per-container),
 **Proportional Power Apportionment** is used to attribute power to individual
 containers:
 
-```
+```text
 Container_Power = Total_HW_Watts × (Container_CPU% / Total_CPU_Capacity)
 ```
 
@@ -235,14 +239,14 @@ If hardware sensors are blocked by the hypervisor (as is common on rented cloud
 VPS), the estimator falls back to the validated linear CPU-to-power model
 (Jarus et al., 2014, error <4%):
 
-```
+```text
 P(t) = P_idle + (P_max - P_idle) × CPU_utilization(t)
 ```
 
 `P_idle` and `P_max` are calculated dynamically from Layer 1's hardware profile
 using a per-core multiplier:
 
-```
+```text
 P_idle = cpu_count × 3.75W
 P_max  = cpu_count × 13.5W
 ```
@@ -267,7 +271,7 @@ Runtime-configurable operation mode, needed to reproduce the thesis's comparativ
 experiment design (see §7):
 
 | Mode | Behavior | Purpose |
-|------|----------|---------|
+| --- | --- | --- |
 | `default_docker` | Observes only, no shaping | Absolute baseline (Condition A) |
 | `static_cap` | Fixed hard CPU cap (80%), no adaptive logic | Isolates value of adaptive control |
 | `reactive_only` | Only Layer 3A (Guardrail) active | Isolates Tier Detection + EMA contribution |
@@ -287,6 +291,7 @@ live aggregation only.
 the container tracking table. The panel reads `discovered_containers.json` (written
 by the HECF engine every poll cycle) to display all available containers as
 clickable cards:
+
 - **Green cards** = currently in the HECF whitelist (`targets.json`) → click to remove.
 - **Grey cards** = available but not managed → click to add.
 - **Mode badge** shows current operating mode: ⚡ All Containers or ✅ Whitelist (N selected).
@@ -314,7 +319,7 @@ to implement against cgroups v1.
 ### 6. Technical Stack
 
 | Component | Technology |
-|-----------|-----------|
+| --- | --- |
 | Core language | Python 3.10+ |
 | Math / Stats | NumPy only |
 | Docker API | Docker SDK for Python |
@@ -372,7 +377,7 @@ the codebase.
 - **Locust** — 4 traffic intensity profiles (`locustfiles/locustfile.py`):
 
   | Profile | Peak CPU range | Pattern |
-  |---------|---------------|---------|
+  | --- | --- | --- |
   | Low | 10–20% | Steady / quiet |
   | Medium | 40–60% | Normal business hours |
   | High | 70–85% | High density |
@@ -385,6 +390,7 @@ the codebase.
 Each run: 30 minutes minimum + 5-minute warm-up (excluded from analysis).
 
 `baselines/` — configuration presets for the 3 comparison baselines:
+
 1. Default Docker (no dynamic limitation) — absolute baseline
 2. Static Resource Allocation (fixed 80% CPU hard cap)
 3. Reactive Threshold-based System (Guardrail only, no Tier Detection/EMA)
@@ -468,31 +474,31 @@ overridable at runtime (env var or CLI flag) to support the ±20% sensitivity sw
 required by proposal §4.4.1.
 
 | Constant | Value | Source |
-|----------|-------|--------|
-| `COLD_START_SAMPLES`       | 30 (revised)       | Gap audit: 120×30s > 30min run |
-| `FALLBACK_TIER`            | 2 (Balanced)       | proposal §3.2.2 |
-| `SAMPLING_CPU_THRESHOLD`   | 60%                | proposal §3.2.3 |
-| `SAMPLING_INTERVAL_HIGH`   | 10s                | proposal §3.2.3 |
-| `SAMPLING_INTERVAL_LOW`    | 30s                | proposal §3.2.3 |
-| `GUARDRAIL_WINDOW`         | 5 samples          | proposal §3.2.4 (3A) |
-| `GUARDRAIL_TRIGGER_COUNT`  | 3 of 5             | proposal §3.2.4 (3A) |
-| `GUARDRAIL_CPU_THRESHOLD`  | 80%                | proposal §3.2.4 (3A) |
-| `GUARDRAIL_RAM_THRESHOLD`  | 90%                | proposal §3.2.4 (3A) |
-| `TIER_WINDOW`              | 120 samples        | proposal §3.2.4 (3B) |
-| `TIER1_AGGRESSIVE_RATIO`   | > 2.0              | proposal Table 3.1 |
-| `TIER2_BALANCED_RATIO`     | 1.5 – 2.0          | proposal Table 3.1 |
-| `TIER3_SOFT_RATIO`         | < 1.5              | proposal Table 3.1 |
-| `TIER_HYSTERESIS_SAMPLES`  | 3                  | Tier transition debounce |
-| `EMA_ALPHA`                | 0.2                | proposal §3.2.4 (3C) |
-| `FRAMEWORK_OVERHEAD_TARGET`| < 5%               | proposal §1, §3.5 |
-| `PSI_SOME_AVG10_THRESHOLD` | 25.0               | Internal Guardrail signal |
-| `MEMORY_HIGH_RATIO`        | 0.85               | Soft-brake before memory.max |
-| `CONNTRACK_MIN`            | 65536              | nf_conntrack pre-flight |
-| `P_IDLE_WATTS`             | Dynamic (cpu_count × 3.75W) | proposal §3.5.1 |
-| `P_MAX_WATTS`              | Dynamic (cpu_count × 13.5W) | proposal §3.5.1 |
-| `STATIC_CAP_CPU_PERCENT`   | 80% (baseline mode only) | proposal §3.4.4 |
-| `MICRO_FREEZE_IDLE_TRIGGER_S` | 2.0             | Layer 4 Micro-Freezing |
-| `MICRO_FREEZE_MAX_DURATION_MS` | 1000            | Layer 4 Micro-Freezing cap |
+| --- | --- | --- |
+| `COLD_START_SAMPLES` | 30 (revised) | Gap audit: 120×30s > 30min run |
+| `FALLBACK_TIER` | 2 (Balanced) | proposal §3.2.2 |
+| `SAMPLING_CPU_THRESHOLD` | 60% | proposal §3.2.3 |
+| `SAMPLING_INTERVAL_HIGH` | 10s | proposal §3.2.3 |
+| `SAMPLING_INTERVAL_LOW` | 30s | proposal §3.2.3 |
+| `GUARDRAIL_WINDOW` | 5 samples | proposal §3.2.4 (3A) |
+| `GUARDRAIL_TRIGGER_COUNT` | 3 of 5 | proposal §3.2.4 (3A) |
+| `GUARDRAIL_CPU_THRESHOLD` | 80% | proposal §3.2.4 (3A) |
+| `GUARDRAIL_RAM_THRESHOLD` | 90% | proposal §3.2.4 (3A) |
+| `TIER_WINDOW` | 120 samples | proposal §3.2.4 (3B) |
+| `TIER1_AGGRESSIVE_RATIO` | > 2.0 | proposal Table 3.1 |
+| `TIER2_BALANCED_RATIO` | 1.5 – 2.0 | proposal Table 3.1 |
+| `TIER3_SOFT_RATIO` | < 1.5 | proposal Table 3.1 |
+| `TIER_HYSTERESIS_SAMPLES` | 3 | Tier transition debounce |
+| `EMA_ALPHA` | 0.2 | proposal §3.2.4 (3C) |
+| `FRAMEWORK_OVERHEAD_TARGET` | < 5% | proposal §1, §3.5 |
+| `PSI_SOME_AVG10_THRESHOLD` | 25.0 | Internal Guardrail signal |
+| `MEMORY_HIGH_RATIO` | 0.85 | Soft-brake before memory.max |
+| `CONNTRACK_MIN` | 65536 | nf_conntrack pre-flight |
+| `P_IDLE_WATTS` | Dynamic (cpu_count × 3.75W) | proposal §3.5.1 |
+| `P_MAX_WATTS` | Dynamic (cpu_count × 13.5W) | proposal §3.5.1 |
+| `STATIC_CAP_CPU_PERCENT` | 80% (baseline mode only) | proposal §3.4.4 |
+| `MICRO_FREEZE_IDLE_TRIGGER_S` | 2.0 | Layer 4 Micro-Freezing |
+| `MICRO_FREEZE_MAX_DURATION_MS` | 1000 | Layer 4 Micro-Freezing cap |
 
 ---
 
@@ -508,7 +514,7 @@ required by proposal §4.4.1.
 ### A.1 Feature Map
 
 | # | Feature | Module | Layer | Brief Description |
-|---|---------|--------|-------|-------------------|
+| --- | --- | --- | --- | --- |
 | 1 | EDoS / IDS-IPS Protection | `framework/security/ddos_filter.py` | Layer 2 | Separates DDoS attack traffic from real user workload before it reaches Layer 3's Tier Detector. Prevents HECF's own throttling from being weaponized into an EDoS attack. |
 | 1 | Anti-EDoS Logic | `framework/security/edos_guard.py` | Layer 3 | Consumes the DDoS classification from `ddos_filter`. Instead of passive throttling, instructs Layer 4 to freeze the targeted container. |
 | 2 | eBPF Runtime Introspection | `framework/security/ebpf_sensor.py` | Layer 2 | Attaches kernel-level probes to track syscalls, function invocations, and disk I/O per container. Detects malware-like behavior that cgroupfs metrics alone cannot see. |
@@ -538,6 +544,7 @@ required by proposal §4.4.1.
 ### A.3 How to Activate / Demonstrate
 
 All safenet features (#1–11) are **enabled by default** via `framework/config.py`:
+
 ```python
 SECURITY_ENABLED = True       # Controls #1-5 (existing) + #6-11 (new):
                                #   watchdog_thaw, duty_cycle_freezer,
@@ -569,7 +576,7 @@ unreliable behind cloud NAT, (3) checkpoint/restore takes 1–3s vs <1ms thaw,
 ## Assumptions & Limitations
 
 | # | Assumption / Limitation | Mitigation |
-|---|------------------------|------------|
+| --- | --- | --- |
 | 1 | No active health-check proxy in front of non-priority containers. Freeze cycle 500–1000ms can trigger flapping with health-check intervals < 1s. | Tag such containers `hecf.priority=high`. Experimental setup uses direct Locust→container traffic only. |
 | 2 | Single-host, no container migration. | By design — targets environments where orchestrator overhead exceeds savings. |
 | 3 | cgroups v2 unified hierarchy required (kernel ≥5.10). | Hard requirement documented in §2 and §5. |

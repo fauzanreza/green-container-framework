@@ -61,7 +61,7 @@ flowchart TB
 ## Pemetaan File → Infrastruktur
 
 | File | Peran | Kategori |
-|---|---|---|
+| --- | --- | --- |
 | `docker-compose.yml` | Konfigurasi deployment 3 service | Infrastruktur |
 | `Dockerfile` | Build image Python + dependencies | Infrastruktur |
 | `requirements.txt` | numpy, docker, flask, gunicorn, locust | Infrastruktur |

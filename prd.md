@@ -1,4 +1,5 @@
 # Product Requirements Document (PRD)
+
 ## Hybrid Energy-Aware Container Framework (HECF)
 
 **Status:** Final — Aligned to `PROPOSAL_THESIS_203012510019_V3`.
@@ -52,6 +53,7 @@ Directly tied to the two Research Questions:
   to Docker's default resource management.
 
 Concretely:
+
 - **Energy Efficiency:** reduce energy consumption via real-time, preventive resource
   shaping — **target 10–20% reduction** vs. Default Docker baseline.
 - **Zero Heavy-ML Overhead:** perform prediction/classification without any ML/DL
@@ -79,7 +81,7 @@ Full technical spec: `architecture.md` §3.
     (revised from 120 — at 30s polling, 120 samples = 60 min > 30-min run duration).
   - Container tagging: classifies containers as `priority` (never hard-capped) or
     `non-priority` (safe to throttle first). Managed dynamically via a `priority_map.json`
-    Shared State controlled by the Dashboard UI, allowing on-the-fly updates without 
+    Shared State controlled by the Dashboard UI, allowing on-the-fly updates without
     container restart (falling back to static Docker labels if undefined).
   - **Dynamic Target Management:** Layer 1 supports a UI-controlled **whitelist scope model**
     via `targets.json` (shared Docker volume, written by dashboard, read by engine):
@@ -155,7 +157,7 @@ the deployment environment:
 - **Software Estimation Mode (cloud VPS / virtualized):** if hardware sensors are
   blocked, falls back to the validated linear model (Jarus et al., 2014, <4% error):
 
-  ```
+  ```text
   P(t) = P_idle + (P_max - P_idle) × CPU_utilization(t)
   ```
 
@@ -194,7 +196,7 @@ total server capacity. Required to validate Hypothesis H2 and answer RQ1.
 Runtime-selectable mode via environment variable:
 
 | Mode | Behavior | Purpose |
-|------|----------|---------|
+| --- | --- | --- |
 | `default_docker` | Observes only, no shaping | Absolute baseline (Condition A) |
 | `static_cap` | Fixed hard CPU cap (80%), no adaptive logic | Isolates value of adaptive control |
 | `reactive_only` | Only Layer 3A (Guardrail) active | Isolates Tier Detection + EMA contribution |
@@ -221,13 +223,13 @@ Runtime-selectable mode via environment variable:
 ### 6. Research Alignment
 
 | Research Gap | Problem with Existing Solutions | How HECF Closes It |
-|---|---|---|
+| --- | --- | --- |
 | G1 — Overhead & monitoring paradox | Heavy orchestrators (K8s/Swarm) or ML-based control; heavy monitoring stacks (ELK/Zipkin) consume the same RAM/energy they try to save | O(1) EMA, Adaptive Sampling, direct cgroupfs reads, <5% overhead target, only 5 tracked metrics |
 | G2 — Migration dependence | Nearly all reviewed literature saves energy via consolidation/migration across physical hosts | HECF is 100% local vertical scaling via cgroups + Micro-Freezing; no migration, works on single-host VPS |
 | G3 — Energy vs. latency trade-off | Aggressive energy saving (e.g., Xu & Buyya: 44% energy saved, latency 174ms→425ms) wreck SLA | Guardrail + Tier Detection + proactive EMA + Micro-Freezing aim to cut energy without breaching P95 <500ms |
 
 | Hypothesis | Statement | Validated by |
-|---|---|---|
+| --- | --- | --- |
 | H1 | HECF produces more stable resource usage and lower energy consumption than default Docker, under identical workload | Metrics 1–3 (CPU, RAM, Energy); paired t-test/Wilcoxon, Cohen's d, 95% CI |
 | H2 | HECF does not degrade web service quality, and the framework's own overhead is not significant | Metrics 4–5 (Latency, Framework Overhead); paired comparison, 95% CI |
 
@@ -268,7 +270,7 @@ Runtime-selectable mode via environment variable:
 ### 9. Metrics Specification (5 total — authoritative list)
 
 | # | Metric | Unit | Hypothesis | RQ |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | 1 | CPU Utilization | % / cgroups limit | H1 | RQ2 |
 | 2 | Memory/RAM Usage | MB/GB | H1 | RQ2 |
 | 3 | Energy Consumption | Joule / kWh (hybrid HW/SW model, no carbon) | H1 | RQ2 |
@@ -282,6 +284,7 @@ No 6th metric and no carbon/environmental metric.
 ### 10. Statistical Analysis Requirements
 
 All analysis at significance level α = 0.05:
+
 - **Preprocessing:** IQR-based outlier removal, cross-scenario normalization,
   per-period aggregation, descriptive stats (mean, median, SD, P95, P50, variance).
 - **Normality check:** Shapiro-Wilk.
@@ -317,7 +320,7 @@ All analysis at significance level α = 0.05:
 > raises questions about security hardening or extended energy savings.
 
 | # | Feature | File | Purpose |
-|---|---------|------|---------|
+| --- | --- | --- | --- |
 | 1 | EDoS / IDS-IPS Protection | `framework/security/ddos_filter.py` | Separates DDoS attack traffic from real workload before Layer 3 analysis. |
 | 1 | Anti-EDoS Logic | `framework/security/edos_guard.py` | Freezes containers under attack instead of passive throttling (avoids weaponizing HECF's own caps). |
 | 2 | eBPF Runtime Introspection | `framework/security/ebpf_sensor.py` | Kernel-level syscall and I/O tracking per container. Detects malware activity invisible to cgroupfs. |
@@ -355,7 +358,7 @@ unreliable behind cloud NAT, (3) checkpoint/restore takes 1–3s vs <1ms thaw,
 ## Assumptions & Limitations
 
 | # | Assumption / Limitation | Mitigation |
-|---|------------------------|------------|
+| --- | --- | --- |
 | 1 | No active health-check proxy in front of non-priority containers. Freeze cycle 500–1000ms can trigger flapping with health-check intervals < 1s. | Tag such containers `hecf.priority=high` to exempt from freezing. Experimental setup uses direct Locust→container traffic only. |
 | 2 | Single-host, no container migration (§11). | By design — targets environments where orchestrator overhead exceeds savings. |
 | 3 | cgroups v2 unified hierarchy required (kernel ≥5.10). | Hard requirement documented in §2 and §5. |

@@ -78,10 +78,10 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    START(["Overload Detection"])
+    START(["START: Overload Detection"])
 
-    PREDIKSI{"EMA Prediktor<br/>aktif?"}
-    MENDEKATI{"Prediksi mendekati<br/>threshold?"}
+    PREDIKSI{"Apakah EMA Prediktor<br/>Aktif?"}
+    MENDEKATI{"Apakah Prediksi EMA<br/>Mendekati Threshold?"}
     BATAS_RENDAH["Turunkan threshold<br/>(lebih sensitif)"]
     BATAS_NORMAL["Threshold standar"]
 
@@ -89,22 +89,22 @@ flowchart TD
 
     CATAT["Simpan ke rolling history<br/>(buffer boolean, 5 sampel)"]
 
-    PENUH{"Buffer > 5?"}
+    PENUH{"Apakah Buffer<br/>> 5 Sampel?"}
     BUANG["Hapus entry terlama (FIFO)"]
 
     HITUNG["Hitung Σ overload dalam buffer"]
 
-    DARURAT{"Overload<br/>≥ 3 dari 5?"}
+    DARURAT{"Apakah Overload Terjadi<br/>≥ 3 dari 5 Sampel?"}
 
-    AMAN(["✅ Normal<br/>(transient spike)"])
+    SELESAI_AMAN(["END: ✅ Normal (Transient Spike)"])
 
-    CEK_PSI{"PSI<br/>tersedia?"}
+    CEK_PSI{"Apakah Sinyal PSI<br/>Tersedia?"}
     BACA_PSI["Baca sinyal stall dari kernel"]
-    PSI_TINGGI{"Stall rate<br/>tinggi?"}
+    PSI_TINGGI{"Apakah Stall Rate<br/>PSI Tinggi?"}
     SANGAT_DARURAT["🚨 Kritis (high confidence)<br/>PSI terkonfirmasi"]
     DARURAT_BIASA["🚨 Darurat<br/>(overload persisten)"]
 
-    AKTIF(["Guardrail AKTIF → Restriksi CPU"])
+    SELESAI_AKTIF(["END: Guardrail AKTIF → Restriksi CPU"])
 
     START --> PREDIKSI
     PREDIKSI -->|Tidak| BATAS_NORMAL
@@ -121,7 +121,7 @@ flowchart TD
     BUANG --> HITUNG
 
     HITUNG --> DARURAT
-    DARURAT -->|"Tidak (< 3)"| AMAN
+    DARURAT -->|"Tidak (< 3)"| SELESAI_AMAN
     DARURAT -->|"Ya (≥ 3)"| CEK_PSI
 
     CEK_PSI -->|Tidak| DARURAT_BIASA
@@ -130,6 +130,6 @@ flowchart TD
     PSI_TINGGI -->|Ya| SANGAT_DARURAT
     PSI_TINGGI -->|Tidak| DARURAT_BIASA
 
-    SANGAT_DARURAT --> AKTIF
-    DARURAT_BIASA --> AKTIF
+    SANGAT_DARURAT --> SELESAI_AKTIF
+    DARURAT_BIASA --> SELESAI_AKTIF
 ```

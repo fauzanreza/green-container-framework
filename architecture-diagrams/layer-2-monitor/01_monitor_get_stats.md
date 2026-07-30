@@ -78,42 +78,42 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    START(["Akuisisi Metrik Container"])
+    START(["START: Akuisisi Metrik Container"])
 
     CARI["Resolusi path cgroupfs target"]
-    KETEMU{"Path valid?"}
-    TIDAK_BISA["Abort: Target Inaccessible"]
+    KETEMU{"Apakah Path<br/>Valid?"}
+    SELESAI_GAGAL(["END: Abort, Target Inaccessible"])
 
     BACA_CPU["Baca cpu.stat (usage_usec)"]
     BACA_RAM["Baca memory.current (RSS + Cache)"]
     KURANGI["Kalkulasi Memori Efektif:<br/>Total Memori - Reclaimable Cache"]
 
-    GAGAL{"I/O Error?"}
-    COBA_LAGI{"Max Retries?"}
+    GAGAL{"Apakah Terjadi<br/>I/O Error?"}
+    COBA_LAGI{"Apakah Max Retries<br/>Tercapai?"}
     TUNGGU["Backoff & Retry"]
     SEMUA_GAGAL["Abort: Max Retries"]
 
-    PERTAMA{"Baseline (t=0)?"}
+    PERTAMA{"Apakah Pembacaan Pertama?<br/>(Belum ada baseline)"}
     NOL["CPU = 0%<br/>(Butuh t=1 untuk delta)"]
     HITUNG["Hitung CPU %:<br/>(Δ usage_usec / Δ time) × 100"]
     HITUNG_RAM["Hitung Memori %:<br/>(Efektif / Limit) × 100"]
 
     SIMPAN["Simpan state (t) sebagai baseline (t-1)"]
-    HASIL(["Return CPU%, RAM%"])
+    SELESAI(["END: Return CPU%, RAM%"])
 
     START --> CARI
     CARI --> KETEMU
-    KETEMU -->|Tidak| TIDAK_BISA
+    KETEMU -->|Tidak| SELESAI_GAGAL
     KETEMU -->|Ya| BACA_CPU
     BACA_CPU --> BACA_RAM
     BACA_RAM --> KURANGI
 
     BACA_CPU -.-> GAGAL
     GAGAL -->|Ya| COBA_LAGI
-    COBA_LAGI -->|"Belum"| TUNGGU
+    COBA_LAGI -->|Belum| TUNGGU
     TUNGGU --> BACA_CPU
-    COBA_LAGI -->|"Sudah"| SEMUA_GAGAL
-    SEMUA_GAGAL --> TIDAK_BISA
+    COBA_LAGI -->|Sudah| SEMUA_GAGAL
+    SEMUA_GAGAL --> SELESAI_GAGAL
 
     KURANGI --> PERTAMA
     PERTAMA -->|Ya| NOL
@@ -121,20 +121,20 @@ flowchart TD
     NOL --> HITUNG_RAM
     HITUNG --> HITUNG_RAM
     HITUNG_RAM --> SIMPAN
-    SIMPAN --> HASIL
+    SIMPAN --> SELESAI
 ```
 
 ### Penyesuaian Frekuensi Pemantauan (Adaptive Sampling)
 
 ```mermaid
 flowchart TD
-    INPUT(["Evaluasi Sampling Interval"])
+    START(["START: Evaluasi Sampling Interval"])
 
-    SIBUK{"Max CPU > 60%?"}
-    SERING["Interval = 10s (High Resolution)"]
-    JARANG["Interval = 30s (Low Overhead)"]
+    SIBUK{"Apakah Max CPU<br/>> 60%?"}
+    SELESAI_SERING(["END: Interval = 10s (High Resolution)"])
+    SELESAI_JARANG(["END: Interval = 30s (Low Overhead)"])
 
-    INPUT --> SIBUK
-    SIBUK -->|"Ya"| SERING
-    SIBUK -->|"Tidak"| JARANG
+    START --> SIBUK
+    SIBUK -->|Ya| SELESAI_SERING
+    SIBUK -->|Tidak| SELESAI_JARANG
 ```

@@ -84,39 +84,39 @@ Meskipun ini dikategorikan sebagai Tools (S1), perhatikan bahwa **nilai yang dit
 
 ```mermaid
 flowchart TD
-    START(["Inisiasi Eksekusi Cgroups"])
+    START(["START: Inisiasi Eksekusi Cgroups"])
 
-    PENTING{"Prioritas<br/>Kritikal?"}
+    PENTING{"Apakah Prioritas Container<br/>Kritikal?"}
     LINDUNGI["🛡️ Bypass Eksklusi (Infrastruktur/DB)"]
 
-    SIMULASI{"Dry-Run<br/>Mode?"}
+    SIMULASI{"Apakah DRY_RUN<br/>Mode Aktif?"}
     CATAT["Log eksekusi (Simulasi)"]
 
     CARI["Resolusi path cgroupfs"]
-    KETEMU{"Path valid?"}
+    KETEMU{"Apakah Path<br/>Valid?"}
     LEWATI["Abort: Inaccessible"]
 
     subgraph CPU["Modulasi Kuota CPU"]
-    CEK_CPU{"Ada batas CPU?"}
+    CEK_CPU{"Apakah Ada<br/>Batas CPU?"}
     BEBASKAN["cpu.max = 'max 100000'<br/>(Relaksasi Quota)"]
     BATASI["cpu.max = '[kuota] 100000'<br/>(Terapkan Quota)"]
     VERIFIKASI["Validasi I/O (Read-back)"]
-    GAGAL{"I/O Error?"}
+    GAGAL{"Apakah Terjadi<br/>I/O Error?"}
     COBA_LAGI["Retry Tulis Ulang"]
     end
 
     subgraph RAM["Modulasi Batas Memori (Low-Priority)"]
-    PERLU_RAM{"Ada batas Memori?"}
+    PERLU_RAM{"Apakah Ada<br/>Batas Memori?"}
     LEWAT_RAM["Bypass Modulasi RAM"]
     HITUNG_RAM["Hitung Resolusi Memori"]
     TULIS_RAM["Tulis memory.max"]
     REM_PERINGATAN["Terapkan memory.high (Soft Limit)"]
-    CEK_SWAP{"ZRAM (Swap)<br/>Aktif?"}
+    CEK_SWAP{"Apakah ZRAM (Swap)<br/>Aktif?"}
     IZINKAN_SWAP["memory.swap.max = limit"]
     LARANG_SWAP["memory.swap.max = 0<br/>(Isolasi Swap)"]
     end
 
-    SELESAI(["Eksekusi Cgroups Selesai"])
+    SELESAI(["END: Eksekusi Cgroups Selesai"])
 
     START --> PENTING
     PENTING -->|Ya| LINDUNGI
@@ -147,4 +147,7 @@ flowchart TD
     LEWAT_RAM --> SELESAI
     IZINKAN_SWAP --> SELESAI
     LARANG_SWAP --> SELESAI
+    LINDUNGI --> SELESAI
+    CATAT --> SELESAI
+    LEWATI --> SELESAI
 ```

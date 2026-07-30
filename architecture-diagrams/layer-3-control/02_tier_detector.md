@@ -104,37 +104,39 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    START(["Klasifikasi Volatilitas (Tiering)"])
+    START(["START: Klasifikasi Volatilitas (Tiering)"])
 
     SIMPAN["Agregasi CPU (Sliding Window, max 120)"]
-    TERLALU_BANYAK{"Size > 120?"}
+    TERLALU_BANYAK{"Apakah Size Buffer<br/>> 120?"}
     HAPUS_LAMA["Eviksi data terlama (FIFO)"]
 
     TENTUKAN(["Evaluasi Volatilitas"])
 
-    CUKUP_DATA{"Sampel ≥ 30?"}
+    CUKUP_DATA{"Apakah Jumlah Sampel<br/>≥ 30?"}
     BELUM_CUKUP["Fallback Tier 2<br/>(Insufficient data)"]
 
-    IDLE{"Deteksi Idle?"}
+    IDLE{"Apakah P50 ≤ 0?<br/>(Terdeteksi Idle)"}
     MODE_SANTAI["Terapkan Tier 3 (Soft)"]
 
     BANDINGKAN["Kalkulasi Statistik:<br/>P50 (Median) & P95 (Spike)"]
     RASIO["Kalkulasi Spike Ratio:<br/>P95 ÷ P50"]
 
-    KATEGORI{"Klasifikasi Rasio"}
+    KATEGORI{"Bagaimana Hasil<br/>Klasifikasi Rasio?"}
     MELONJAK["Rasio > 2.0 → Tier 1 (Aggressive)"]
     SEDANG["1.5 ≤ Rasio ≤ 2.0 → Tier 2 (Balanced)"]
     STABIL["Rasio < 1.5 → Tier 3 (Soft)"]
 
-    PERTAMA{"Initial State?"}
+    PERTAMA{"Apakah Ini<br/>Initial State?"}
     LANGSUNG["Terapkan Tier Awal"]
 
-    SAMA{"New Tier == Current Tier?"}
+    SAMA{"Apakah New Tier<br/>Sama Dengan Current?"}
     TETAP["State Stabil"]
 
-    KONSISTEN{"Hysteresis Check:<br/>Konsisten 3 siklus?"}
+    KONSISTEN{"Apakah Hysteresis Konsisten<br/>Selama 3 Siklus?"}
     UBAH["✅ Commit Tier Baru"]
     TAHAN["Hold (Transisi ditunda)"]
+
+    SELESAI(["END: Return Tier Status"])
 
     START --> SIMPAN
     SIMPAN --> TERLALU_BANYAK
@@ -164,4 +166,11 @@ flowchart TD
     SAMA -->|Tidak| KONSISTEN
     KONSISTEN -->|"Ya (3 siklus)"| UBAH
     KONSISTEN -->|"Belum (Hold)"| TAHAN
+
+    BELUM_CUKUP --> SELESAI
+    MODE_SANTAI --> SELESAI
+    LANGSUNG --> SELESAI
+    TETAP --> SELESAI
+    UBAH --> SELESAI
+    TAHAN --> SELESAI
 ```
