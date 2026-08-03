@@ -152,7 +152,7 @@ flowchart TD
 
     KLASIFIKASI["Volatility Classification (Tiering):<br/>Evaluasi pola beban (Spiky/Stable)"]
     PREDIKSI["Trend Forecasting (EMA):<br/>Prediksi trayektori beban"]
-    DARURAT{"Guardrail Check:<br/>Apakah Terjadi Persistent Overload?"]
+    DARURAT{"Guardrail Check:<br/>Apakah Terjadi Persistent Overload?"}
 
     INTERVENSI["🚨 Preventative Action (Guardrail):<br/>Strict CPU Throttling (Anti-Starvation)"]
 
