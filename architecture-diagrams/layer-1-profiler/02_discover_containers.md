@@ -1,6 +1,6 @@
 # Flowchart — Profiler.discover_containers() (Layer 1)
 
-> **Kode Sumber:** `framework/profiler.py` → class `EnvironmentProfiler`, fungsi `discover_containers()` (baris 91–170)
+> **Kode Sumber:** `framework/profiler.py` → fungsi `discover_containers()` (baris 94–260)
 > **Posisi di Diagram:** Layer 1 — Environment Profiler → Container Discovery
 > **Kategori:** 🛠️ TOOLS & INFRASTRUKTUR (S1)
 
@@ -28,8 +28,8 @@ flowchart TD
     PORT_DB{"Port DB terbuka?<br/>(3306, 5432, 6379, 27017)"}
     SKIP_DB["Skip (Mencegah korupsi DB)"]
 
-    PORT_WEB{"Port Web terbuka?<br/>(80, 443, 8080)"}
-    PRIO_WEB["Set weight = 2 (Medium Prio)"]
+    PORT_WEB{"Port Web terbuka?<br/>(80, 443, 8080, 8443)"}
+    PRIO_WEB["Set priority = True<br/>(auto_priority_reason)"]
 
     CHECK_MANUAL_PRIO{"container.name in<br/>CONTAINER_PRIORITY?"}
     PRIO_MANUAL["Override weight dari config"]
@@ -42,7 +42,7 @@ flowchart TD
     APPEND["Append ke container_targets"]
     NEXT["Lanjut ke container berikutnya"]
 
-    WRITE_JSON["Tulis container_targets ke<br/>targets.json (untuk Dashboard)"]
+    WRITE_JSON["Tulis discovered_containers.json<br/>(untuk Dashboard UI — semua non-excluded)"]
 
     FILTER_TARGETS{"TARGET_CONTAINERS<br/>tidak kosong?"}
     DO_FILTER["Filter container_targets<br/>hanya yang ada di list"]
@@ -120,8 +120,8 @@ flowchart TD
     PORT_BAHAYA{"Apakah Expose DB Ports?<br/>(3306, 5432, dll)"}
     LEWAT3["Bypass: Hindari I/O Corrupt"]
 
-    PORT_WEB{"Apakah Expose Web Ports?<br/>(80, 443, dll)"}
-    PENTING_WEB["Set Prio: Web Service"]
+    PORT_WEB{"Apakah Expose Web Ports?<br/>(80, 443, 8080, 8443)"}
+    PENTING_WEB["Set priority = True<br/>(auto_priority_reason)"]
 
     CEK_SETTING{"Apakah Ada<br/>Manual Priority?"}
     PAKAI_MANUAL["Apply Manual Weight"]
@@ -135,7 +135,7 @@ flowchart TD
 
     LANJUT["Next Container"]
 
-    TULIS["Sync ke targets.json (Dashboard)"]
+    TULIS["Sync ke discovered_containers.json<br/>(semua non-excluded untuk Dashboard)"]
 
     CEK_WHITELIST{"Apakah Whitelist Mode<br/>Aktif?"}
     WHITELIST["Apply Whitelist Filter"]

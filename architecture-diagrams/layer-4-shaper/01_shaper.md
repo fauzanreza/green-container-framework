@@ -1,6 +1,6 @@
 # Flowchart — Shaper.apply_shaping() (Layer 4)
 
-> **Kode Sumber:** `framework/shaper.py` → class `ContainerShaper`, fungsi `apply_shaping()` (baris 31–123)
+> **Kode Sumber:** `framework/shaper.py` → fungsi `shape_container()` (baris 33–81)
 > **Posisi di Diagram:** Layer 4 — Adaptive Resource Shaping → 4A Cgroups Writer
 > **Kategori:** 🛠️ TOOLS & INFRASTRUKTUR (S1)
 
@@ -8,10 +8,10 @@ Shaper bertugas sebagai eksekutor. Menerima input dari Layer 3 (Tier & Limit) da
 
 ```mermaid
 flowchart TD
-    START(["apply_shaping(container_name, cpu_quota, mem_ratio)"])
+    START(["shape_container(name, id, priority, cpu_quota,<br/>cpu_period, dry_run, mem_ratio, host_mem_bytes)"])
 
-    PRIO{"Container<br/>Tier-0 (Prio)?"}
-    SKIP(["Return (Bypass)"])
+    PRIO{"priority=True<br/>AND cpu_quota > 0?"}
+    SKIP(["Return True<br/>(Shield — log SHIELD)"])
 
     DRY_RUN{"DRY_RUN_MODE?"}
     LOG_ONLY["Log 'Would shape...'"]
@@ -21,9 +21,9 @@ flowchart TD
     PATH_FOUND{"Path valid?"}
     ABORT(["Return (Target terminated)"])
 
-    CPU_QUOTA{"cpu_quota<br/>ditentukan?"}
-    WRITE_UNLIMITED["Tulis 'max 100000' ke cpu.max<br/>(Unlimited)"]
-    WRITE_LIMITED["Tulis '{quota} 100000' ke cpu.max<br/>(Throttled)"]
+    CPU_QUOTA{"cpu_quota<br/>> 0?"}
+    WRITE_UNLIMITED["Tulis 'max' ke cpu.max<br/>(Unlimited — hapus kuota)"]
+    WRITE_LIMITED["Tulis '{quota} {period}' ke cpu.max<br/>(Throttled)"]
 
     VERIFY_CPU["Baca ulang cpu.max untuk verifikasi"]
     CPU_ERR{"I/O Error?"}
@@ -97,9 +97,9 @@ flowchart TD
     LEWATI["Abort: Inaccessible"]
 
     subgraph CPU["Modulasi Kuota CPU"]
-    CEK_CPU{"Apakah Ada<br/>Batas CPU?"}
-    BEBASKAN["cpu.max = 'max 100000'<br/>(Relaksasi Quota)"]
-    BATASI["cpu.max = '[kuota] 100000'<br/>(Terapkan Quota)"]
+    CEK_CPU{"Apakah<br/>cpu_quota > 0?"}
+    BEBASKAN["cpu.max = 'max'<br/>(Hapus Quota)"]
+    BATASI["cpu.max = '{quota} {period}'<br/>(Terapkan Quota)"]
     VERIFIKASI["Validasi I/O (Read-back)"]
     GAGAL{"Apakah Terjadi<br/>I/O Error?"}
     COBA_LAGI["Retry Tulis Ulang"]

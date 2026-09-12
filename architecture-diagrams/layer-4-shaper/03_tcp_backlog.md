@@ -1,38 +1,38 @@
-# Flowchart — TCP Backlog Queue Validation (Layer 4)
+# Flowchart — TCPBacklogManager.verify() (Layer 4)
 
-> **Kode Sumber:** `framework/micro_freezer.py` → class `MicroFreezer`, fungsi `_verify_tcp_backlog()` (baris 110–165)
-> **Posisi di Diagram:** Layer 4 — Adaptive Resource Shaping → 4B Micro-Freezer (Safety Check)
+> **Kode Sumber:** `framework/security/tcp_backlog_manager.py` → class `TCPBacklogManager`, fungsi `verify()` (baris 67–115) dan `check_app_backlog()` (baris 128–193)
+> **Posisi di Diagram:** Layer 4 — Adaptive Resource Shaping → 4B Micro-Freezer (Safety Pre-flight)
 > **Kategori:** 🌟 INOVASI ALGORITMA (S2)
 
 Mekanisme verifikasi *Network-Buffer-Aware* yang memungkinkan Micro-Freezing. Memastikan bahwa selama container di-freeze (500–1000ms), koneksi HTTP/TCP baru yang masuk tidak akan di-drop oleh kernel, melainkan ditampung di antrean (backlog) sampai container di-thaw.
 
 ```mermaid
 flowchart TD
-    START(["_verify_tcp_backlog(container_name)"])
+    START(["TCPBacklogManager.verify()"])
 
-    READ_SYSCTL["Baca net.core.somaxconn dari host"]
+    READ_SYSCTL["Baca /proc/sys/net/core/somaxconn<br/>(host net.core.somaxconn)"]
     SYSCTL_ERR{"I/O Error?"}
     FALLBACK_SYSCTL["somaxconn = 128 (Default)"]
 
-    CALC_EXPECTED["expected_queue = RPS × FREEZE_DURATION<br/>(Misal: 100 × 1.0 = 100)"]
+    CALC_EXPECTED["expected_queue = expected_rps × (max_freeze_ms/1000)<br/>(e.g. 100.0 × 1.0 = 100)"]
     CALC_MIN["min_required = expected_queue × 2"]
 
-    COMPARE1{"somaxconn<br/>≥ min_required?"}
-    HOST_LOW(["Return False<br/>(Host queue too low)"])
+    COMPARE1{"somaxconn<br/>≥ required?"}
+    HOST_LOW(["Return {safe: False,<br/>recommendation: 'increase somaxconn'}"])
 
-    GET_PID["Get PID container"]
-    PID_ERR{"PID valid?"}
-    NO_PID(["Return False<br/>(Cannot read namespace)"])
+    GET_PID["check_app_backlog(container_name, container_id)"]
+    PID_ERR{"pid > 0?"}
+    NO_PID(["Return {safe: True,<br/>recommendation: 'no_pid'}"])
 
     READ_PROC["Baca /proc/{pid}/net/tcp"]
     PROC_ERR{"File ada?"}
-    NO_PROC(["Return False<br/>(No TCP sockets)"])
+    NO_PROC(["Return {safe: True,<br/>recommendation: 'no_listen_sockets'}"])
 
-    PARSE["Parse status 0A (LISTEN)<br/>Extract tx_queue (backlog)"]
+    PARSE["Parse status 0A (LISTEN)<br/>Extract tx_queue (backlog hex)"]
 
-    COMPARE2{"Min(tx_queue)<br/>≥ 128?"}
-    APP_LOW(["Return False<br/>(App backlog too low)"])
-    APP_OK(["Return True<br/>(Backlog OK, Safe to Freeze)"])
+    COMPARE2{"min(tx_queue)<br/>≥ 128?"}
+    APP_LOW(["Return {safe: False,<br/>recommendation: 'app backlog too low'}"])
+    APP_OK(["Return {safe: True,<br/>recommendation: 'ok'}"])
 
     START --> READ_SYSCTL
     READ_SYSCTL --> SYSCTL_ERR

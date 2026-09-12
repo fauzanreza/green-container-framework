@@ -10,7 +10,7 @@ Sistem profilasi otomatis. Menghindari hardcoding parameter. Mendeteksi topologi
 flowchart TD
     START(["profile_host()"])
 
-    CPU_TRY["Deteksi Core:<br/>baca /sys/devices/system/cpu/online"]
+    CPU_TRY["Deteksi Core:<br/>baca /proc/cpuinfo<br/>(hitung baris 'processor')"]
     CPU_ERR{"I/O Error?"}
     CPU_FALLBACK["Fallback:<br/>os.cpu_count()"]
     CPU_OK["Simpan host_cores"]
@@ -25,15 +25,15 @@ flowchart TD
     RAPL_YES["Set hw_sensor_available = True"]
     RAPL_NO["Set hw_sensor_available = False"]
 
-    NS_CHECK["Validasi Namespace:<br/>baca /proc/1/cgroup"]
-    NS_MATCH{"Sesuai?"}
-    NS_WARN["Log Warning: Namespace mismatch!"]
-    NS_OK["Log Info: Namespace OK"]
+    NS_CHECK["Validasi Namespace:<br/>cross-check os.cpu_count()<br/>vs /proc/cpuinfo count"]
+    NS_MATCH{"Match?"}
+    NS_WARN["Log Critical: /proc MISMATCH!<br/>pid:host mungkin tidak di-set"]
+    NS_OK["Log Info: /proc verification PASSED"]
 
-    NET_CHECK["Deteksi Batas Netfilter:<br/>baca nf_conntrack_max"]
-    NET_WARN{"nf_conntrack_max<br/>< 131072?"}
-    WARN_LOG["Log Warning: Risiko packet drop"]
-    NET_OK["Log Info: Conntrack OK"]
+    NET_CHECK["Deteksi Batas Netfilter:<br/>baca /proc/sys/net/netfilter/nf_conntrack_max"]
+    NET_WARN{"nf_conntrack_max<br/>< 65536?"}
+    WARN_LOG["Log Warning: Risiko packet drop<br/>(CONNTRACK_MIN=65536)"]
+    NET_OK["Log Info: Conntrack OK (≥ 65536)"]
 
     RETURN(["Return dict(host_cores, host_ram, dll)"])
 
@@ -84,14 +84,14 @@ flowchart TD
     SENSOR_YA["✅ Mode Hardware-True"]
     SENSOR_TIDAK["⚠ Fallback: Software Estimation"]
 
-    CEK_ASLI["Verifikasi Cgroup Namespace (/proc/1/cgroup)"]
-    ASLI{"Sesuai?"}
-    ASLI_OK["✅ Validasi Namespace Sukses"]
-    ASLI_GAGAL["⚠ Peringatan: Inkonsistensi Namespace"]
+    CEK_ASLI["Verifikasi Namespace:<br/>cross-check os.cpu_count() vs /proc/cpuinfo"]
+    ASLI{"Jumlah Core<br/>Match?"}
+    ASLI_OK["✅ /proc Verification PASSED"]
+    ASLI_GAGAL["⚠ Log Critical: /proc MISMATCH<br/>(pid:host belum di-set)"]]
 
-    CEK_JARINGAN["Verifikasi Kapasitas nf_conntrack"]
-    JARINGAN{"Kapasitas<br/>Memadai?"}
-    JARINGAN_OK["✅ Kapasitas Conntrack Memadai"]
+    CEK_JARINGAN["Verifikasi nf_conntrack_max<br/>(threshold: 65536)"]
+    JARINGAN{"nf_conntrack_max<br/>≥ 65536?"}
+    JARINGAN_OK["✅ Conntrack OK"]
     JARINGAN_WARN["⚠ Peringatan: Risiko packet drop"]
 
     SELESAI(["Profil Host Terbentuk (Ready)"])

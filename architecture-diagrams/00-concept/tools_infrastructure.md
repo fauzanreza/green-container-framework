@@ -119,3 +119,14 @@ flowchart TB
         LOCUST -->|"Inject HTTP Requests"| BENCHMARK
     end
 ```
+
+---
+
+## 🔌 Hubungan Infrastruktur dengan Algoritma (HECF Engine)
+
+Jika `big_picture.md` dan `main_control_loop.md` membahas otak dari algoritma (isi dari folder `framework/`), maka diagram infrastruktur di atas menunjukkan **rumah dan lingkungan** di mana algoritma tersebut hidup.
+
+1. **HECF Engine (`framework/main.py`)**: Ini adalah blok utama yang menjalankan seluruh *codingan* algoritma yang dijelaskan di file sebelumnya. Diinjeksi dalam bentuk _container_ mandiri lewat `docker-compose.yml`.
+2. **Dashboard (`dashboard.py`)**: Algoritma HECF Engine tidak memiliki tampilan grafis. Oleh karena itu, *engine* akan membuang hasil hitungannya ke file `metrics.csv`. Dashboard bertugas membaca file tersebut dan menampilkannya menjadi grafik yang indah di browser. 
+3. **Pemberi Beban (`locustfile.py`)**: Untuk membuktikan apakah algoritma di Layer 3 dan Layer 4 berfungsi dengan baik menahan beban, sistem membutuhkan simulasi serangan _traffic_ internet. Locust yang mengambil peran ini.
+4. **Target (`http-arena/main.py`)**: Ini adalah kontainer aplikasi bohongan (dummy) yang pura-pura menjadi server web. Algoritma HECF Engine (*Layer 2*) akan memonitor kontainer ini, sementara Locust menembaknya dengan _traffic_.

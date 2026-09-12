@@ -28,6 +28,8 @@ flowchart TD
     CONTAINER_LOOP(["FOR EACH container in targets"])
 
     subgraph PER_CONTAINER["Per-Container Processing"]
+        ZOMBIE_HEAL["[Security] ZombieHealer.evaluate()<br/>Jika action=heal → restart container<br/><i>Skip normal shaping</i>"]
+
         L2_MONITOR["<b>Layer 2:</b> monitor.get_stats(name, id)<br/>Baca cpu.stat, memory.stat dari cgroupfs"]
         STALE{"Stats<br/>stale?"}
         SKIP_STALE["Skip shaping<br/>(container mungkin mati)"]
@@ -35,6 +37,9 @@ flowchart TD
         L3B["<b>Layer 3B:</b> tier_detector.add_sample(name, cpu)<br/>tier_int = tier_detector.get_tier(name)<br/><i>P95/P50 + Hysteresis</i>"]
         L3C["<b>Layer 3C:</b> ema_pred = predictor.update(name, cpu)<br/><i>Y(t) = α × cpu + (1-α) × Y(t-1)</i>"]
         L3A["<b>Layer 3A:</b> guardrail.update(name, cpu, mem, ema_pred)<br/><i>3-of-5 rolling + PSI + EMA threshold adjust</i>"]
+
+        EDOS_CHECK{"[Security] EDoS<br/>action=freeze?"}
+        EDOS_FREEZE["action = EDOS_FREEZE<br/>micro_freezer._freeze(name, id)"]
 
         MODE_CHECK{"MODE?"}
 
@@ -51,10 +56,10 @@ flowchart TD
             T3["Tier 3 → SOFT<br/>quota = unlimited"]
         end
 
-        MICRO_FREEZE_CHECK["<b>Layer 4 ext:</b> Micro-Freeze evaluate<br/>Cek idle + populated + safety"]
+        MICRO_FREEZE_CHECK["<b>Layer 4 ext:</b> Micro-Freeze evaluate()<br/>Cek idle + populated + safety + eBPF"]
         MF_RESULT{"Freeze<br/>eligible?"}
-        MF_ACTION["action = MICRO_FREEZE<br/>cgroup.freeze = 1<br/>quota = skip (CPU already 0%)"]
-        MF_THAW["Container di-thaw<br/>Resume normal shaping"]
+        MF_ACTION["action = MICRO_FREEZE<br/>evaluate() returns 'freeze'<br/>quota = skip (CPU already 0%)"]
+        MF_THAW["evaluate() returns 'thaw'<br/>Resume normal shaping"]
 
         L4_SHAPE["<b>Layer 4:</b> shape_container()<br/>Tulis cpu.max, memory.max ke cgroups"]
 
@@ -80,7 +85,9 @@ flowchart TD
     NO_TARGETS -->|Tidak| OVERHEAD
     OVERHEAD --> CONTAINER_LOOP
 
-    CONTAINER_LOOP --> L2_MONITOR
+    CONTAINER_LOOP --> ZOMBIE_HEAL
+    ZOMBIE_HEAL -->|"Healed: skip"| CONTAINER_LOOP
+    ZOMBIE_HEAL -->|"Normal"| L2_MONITOR
     L2_MONITOR --> STALE
     STALE -->|Ya| SKIP_STALE
 
@@ -88,7 +95,10 @@ flowchart TD
     L3B --> L3C
     L3C --> L3A
 
-    L3A --> MODE_CHECK
+    L3A --> EDOS_CHECK
+    EDOS_CHECK -->|"Ya: EDoS attack"| EDOS_FREEZE
+    EDOS_CHECK -->|"Tidak: Normal"| MODE_CHECK
+    EDOS_FREEZE --> ENERGY_EST
     MODE_CHECK -->|default_docker| DEFAULT_DOCKER
     MODE_CHECK -->|static_cap| STATIC_CAP
     MODE_CHECK -->|reactive_only| REACTIVE_ONLY
@@ -216,3 +226,22 @@ flowchart TD
     SESUAIKAN --> SELESAI
     SELESAI --> LOOP
 ```
+
+---
+
+## 🔗 Penjelasan Orkestrasi (Hubungan Antar File Kode)
+
+Diagram di atas merupakan visualisasi dari logika *loop* utama yang berjalan di dalam file `framework/main.py`. Berikut adalah penjelasan naratif bagaimana file-file algoritma (yang daftarnya ada di `big_picture.md`) dipanggil dan saling berinteraksi secara berurutan dalam satu putaran waktu (polling cycle):
+
+1. **Inisialisasi (Luar Loop)**: Sebelum putaran dimulai, `main.py` memanggil `profiler.py` dan `hardware_sensor.py` untuk mengukur kapasitas maksimal server.
+2. **Penemuan Target (`profiler.py`)**: Di awal setiap putaran, `main.py` meminta `profiler.py` mencari semua kontainer target yang sedang menyala menggunakan Docker.
+3. **Membaca Data Nyata (`monitor.py`)**: Untuk setiap kontainer, `main.py` memanggil fungsi dari `monitor.py` untuk terjun langsung ke kernel Linux dan mencatat berapa % CPU yang sedang dipakai detik ini.
+4. **Analisis Berantai (Layer 3)**:
+   - Data % CPU dari `monitor.py` langsung dilempar oleh `main.py` ke **`tier_detector.py`** untuk diberi label (Spiky/Tenang).
+   - Angka yang sama dilempar juga ke **`predictor.py`** untuk ditebak tren ke depannya.
+   - Tebakan tersebut beserta angka pemakaian RAM dilempar ke **`guardrail.py`** untuk memastikan apakah server akan _hang_ atau tidak.
+5. **Tindakan/Eksekusi (`shaper.py` & `security/micro_freezer.py`)**:
+   - Jika `monitor.py` melaporkan kontainer sedang menganggur total (0%), `main.py` menyuruh `micro_freezer.py` untuk membekukan sementara kontainer tersebut.
+   - Jika tidak menganggur, `main.py` akan melihat kesimpulan dari Guardrail dan Tier Detector, menghitung batasan angka (kuota), lalu menyuruh `shaper.py` menulis kuota tersebut ke sistem operasi.
+
+Semua langkah ini diulang terus-menerus untuk setiap kontainer, menghasilkan aliran data yang lancar antar file algoritma.

@@ -1,6 +1,6 @@
 # Flowchart — Monitor.get_container_stats() (Layer 2)
 
-> **Kode Sumber:** `framework/monitor.py` → class `ContainerMonitor`, fungsi `get_container_stats()` (baris 32–105)
+> **Kode Sumber:** `framework/monitor.py` → class `Monitor`, fungsi `get_stats()` (baris 102–155)
 > **Posisi di Diagram:** Layer 2 — Monitoring Engine → Direct cgroupfs v2 Read
 > **Kategori:** 🌟 INOVASI ALGORITMA (S2)
 
@@ -8,11 +8,11 @@ Algoritma pembacaan I/O kernel langsung tanpa perantara Docker API. Metode ini m
 
 ```mermaid
 flowchart TD
-    START(["get_container_stats(container_name)"])
+    START(["get_stats(container_name, container_id)"])
 
-    RESOLVE_PATH["Resolusi cgroup path:<br/>/sys/fs/cgroup/.../docker-UID.scope"]
+    RESOLVE_PATH["Resolusi cgroup path via _get_cgroup_path(container_id):<br/>/sys/fs/cgroup/system.slice/docker-{id}.scope"]
     CGROUP_FOUND{"Path valid?"}
-    STALE_RET(["Return None<br/>(Target terminated)"])
+    STALE_RET(["Return _stale_result()<br/>{stale: True, cpu_percent: -1}"])
 
     RETRY_LOOP["Iterasi baca (max 3 retries)"]
 
@@ -31,7 +31,7 @@ flowchart TD
     READ_FAIL{"I/O Error?"}
     RETRY{"Retries < 3?"}
     RETRY_WAIT["time.sleep(0.01)"]
-    ALL_FAIL(["Return None<br/>(Max retries exceeded)"])
+    ALL_FAIL(["Return _stale_result()<br/>{stale: True, cpu_percent: -1}"])
 
     HAS_PREV{"Ada prev_stats?"}
     FIRST_SAMPLE["Simpan current stats<br/>Return cpu_pct = 0.0"]
@@ -40,7 +40,7 @@ flowchart TD
 
     SAVE_STATE["prev_stats[name] = current stats"]
 
-    RETURN(["Return (cpu_pct, mem_pct)"])
+    RETURN(["Return {cpu_percent, mem_percent,<br/>mem_usage, mem_limit, stale: False}"])
 
     START --> RESOLVE_PATH
     RESOLVE_PATH --> CGROUP_FOUND
@@ -82,7 +82,7 @@ flowchart TD
 
     CARI["Resolusi path cgroupfs target"]
     KETEMU{"Apakah Path<br/>Valid?"}
-    SELESAI_GAGAL(["END: Abort, Target Inaccessible"])
+    SELESAI_GAGAL(["END: Abort — Return {stale: True}<br/>(main loop akan skip shaping)"])
 
     BACA_CPU["Baca cpu.stat (usage_usec)"]
     BACA_RAM["Baca memory.current (RSS + Cache)"]
@@ -91,7 +91,7 @@ flowchart TD
     GAGAL{"Apakah Terjadi<br/>I/O Error?"}
     COBA_LAGI{"Apakah Max Retries<br/>Tercapai?"}
     TUNGGU["Backoff & Retry"]
-    SEMUA_GAGAL["Abort: Max Retries"]
+    SEMUA_GAGAL["Abort: Max Retries→ Return {stale: True}"]
 
     PERTAMA{"Apakah Pembacaan Pertama?<br/>(Belum ada baseline)"}
     NOL["CPU = 0%<br/>(Butuh t=1 untuk delta)"]
@@ -99,7 +99,7 @@ flowchart TD
     HITUNG_RAM["Hitung Memori %:<br/>(Efektif / Limit) × 100"]
 
     SIMPAN["Simpan state (t) sebagai baseline (t-1)"]
-    SELESAI(["END: Return CPU%, RAM%"])
+    SELESAI(["END: Return {cpu_percent, mem_percent,<br/>mem_usage, mem_limit, stale: False}"])
 
     START --> CARI
     CARI --> KETEMU

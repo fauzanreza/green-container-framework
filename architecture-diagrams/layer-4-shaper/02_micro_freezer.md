@@ -1,6 +1,6 @@
-# Flowchart — MicroFreezer.apply_freeze() (Layer 4)
+# Flowchart — MicroFreezer.evaluate() (Layer 4)
 
-> **Kode Sumber:** `framework/micro_freezer.py` → class `MicroFreezer`, fungsi `apply_freeze()` (baris 32–106)
+> **Kode Sumber:** `framework/security/micro_freezer.py` → class `MicroFreezer`, fungsi `evaluate()` (baris 78–145) dan `record_activity()` (baris 62–76)
 > **Posisi di Diagram:** Layer 4 — Adaptive Resource Shaping → 4B Micro-Freezer
 > **Kategori:** 🌟 INOVASI ALGORITMA (S2)
 
@@ -8,43 +8,43 @@ Algoritma pembekuan container tingkat milidetik (`cgroup.freeze`). Dioptimasi un
 
 ```mermaid
 flowchart TD
-    START(["apply_freeze(container_name, is_dry_run)"])
+    START(["evaluate(container_name, container_id, priority, cpu_percent)"])
 
-    IS_PRIORITY{"Tier-0<br/>(Prio)?"}
-    EXEMPT(["Return False<br/>(Bypass)"])
+    IS_PRIORITY{"priority<br/>== True?"}
+    EXEMPT(["Return {action: 'none',<br/>reason: 'priority_exempt'}"])
 
-    FIRST_SEEN{"Container<br/>baru?"}
-    INIT_STATE["Init freeze state:<br/>is_frozen = False<br/>frozen_at = None<br/>last_activity = now"]
-    FIRST_RET(["Return False"])
+    FIRST_SEEN{"container_id<br/>in state?"}
+    INIT_STATE["Init state[container_id]:<br/>frozen=False, frozen_at=0.0<br/>last_activity=now"]
+    FIRST_RET(["Return {action: 'none',<br/>reason: 'first_seen'}"])
 
-    IS_FROZEN{"is_frozen<br/>== True?"}
+    IS_FROZEN{"state['frozen']<br/>== True?"}
 
-    CALC_DURATION["duration = now - frozen_at"]
-    DURATION_EXCEEDED{"duration<br/>≥ 1000ms?"}
-    FORCE_THAW["Force Thaw:<br/>Tulis 0 ke cgroup.freeze<br/>is_frozen = False"]
-    STILL_FROZEN(["Return True<br/>(Keep frozen)"])
+    CALC_DURATION["frozen_duration_ms = (now - frozen_at) × 1000"]
+    DURATION_EXCEEDED{"frozen_duration_ms<br/>≥ max_freeze_ms?"}
+    FORCE_THAW["Force Thaw: _thaw(id, reason='max_duration')<br/>state.frozen = False"]
+    STILL_FROZEN(["Return {action: 'none',<br/>reason: 'already_frozen'}"])
 
-    CALC_IDLE["idle_time = now - last_activity"]
+    CALC_IDLE["idle_duration = now - state.last_activity"]
 
-    POPULATED_AVAIL{"cgroup.events<br/>bisa dibaca?"}
-    KERNEL_ACTIVE{"populated == 1?"}
-    NOT_IDLE["Update last_activity = now"]
-    KERNEL_IDLE{"idle_time<br/>≥ 2000ms?"}
-    TOO_RECENT1(["Return False<br/>(Wait longer)"])
+    POPULATED_AVAIL{"_check_populated(id)<br/>returns value?"}
+    KERNEL_ACTIVE{"populated<br/>== True?"}
+    NOT_IDLE["Return {action: 'none',<br/>reason: 'populated_active'}"]
+    KERNEL_IDLE{"idle_duration<br/>≥ idle_trigger?"}
+    TOO_RECENT1(["Return {action: 'none',<br/>reason: 'depopulated_but_too_recent'}"])
     
-    FALLBACK_CHECK{"idle_time<br/>≥ 2000ms?"}
-    TOO_RECENT2(["Return False<br/>(Wait longer)"])
+    FALLBACK_CHECK{"idle_duration<br/>≥ idle_trigger?"}
+    TOO_RECENT2(["Return {action: 'none',<br/>reason: 'not_idle_enough'}"])
 
-    EBPF_CHECK{"Cek eBPF:<br/>Ada tx aktif?"}
-    DEFER(["Return False<br/>(Safety defer)"])
+    EBPF_CHECK{"ebpf_sensor.has_open_connections(id)?"}
+    DEFER(["Return {action: 'defer',<br/>reason: 'open_connections'}"])
 
-    FIND_PATH["Resolusi cgroup path"]
+    FIND_PATH["Resolusi cgroup.freeze path"]
 
-    IS_DRY{"is_dry_run?"}
-    DRY_LOG["Log 'Would freeze...'"]
-    WRITE_FREEZE["Tulis 1 ke cgroup.freeze"]
-    UPDATE_STATE["Update state:<br/>is_frozen = True<br/>frozen_at = now"]
-    FREEZE_RET(["Return True"])
+    IS_DRY{"dry_run?"}
+    DRY_LOG["Log '[DRY-RUN] Would FREEZE...'"]
+    WRITE_FREEZE["Tulis '1' ke cgroup.freeze<br/>via _freeze(name, id)"]
+    UPDATE_STATE["Update state[id]:<br/>frozen=True, frozen_at=now"]
+    FREEZE_RET(["Return {action: 'freeze',<br/>reason: 'idle:{duration}s'}"])
 
     START --> IS_PRIORITY
     IS_PRIORITY -->|Ya| EXEMPT
