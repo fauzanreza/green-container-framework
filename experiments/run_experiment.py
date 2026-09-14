@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # experiments/run_experiment.py
 # Orchestrates the 72-run experimental design matrix for HECF thesis.
+# 2 Conditions x 3 Workloads x 4 Intensities x 3 Replications = 72 runs
 
 import os
 import time
@@ -17,31 +18,37 @@ logging.basicConfig(
 )
 logger = logging.getLogger("hecf.experiment")
 
-# Factorial Design Variables (3 x 3 x 2 x 4 = 72 combinations)
-WORKLOADS = ["web_tier", "api_tier", "db_tier"]
-TRAFFIC_PATTERNS = ["steady", "spiky", "burst"]
-SENSITIVITY_LEVELS = ["normal", "tight"] # tight = threshold -20%
-MODES = ["default_docker", "static_cap", "reactive_only", "full_hecf"]
+# Factorial Design Variables
+CONDITIONS = ["default_docker", "hecf_active"]
+WORKLOADS = ["json", "static", "db"]
+INTENSITIES = {
+    "Low": {"users": 10, "spawn_rate": 1},
+    "Medium": {"users": 50, "spawn_rate": 5},
+    "High": {"users": 150, "spawn_rate": 10},
+    "Spike": {"users": 300, "spawn_rate": 50},
+}
+REPLICATIONS = [1, 2, 3]
 
-EXPERIMENT_DURATION_SEC = 15 * 60 # 15 minutes eval
-COOLDOWN_DURATION_SEC = 5 * 60    # 5 minutes cooldown/cold-start
+WARMUP_SEC = 5 * 60
+EVALUATION_SEC = 30 * 60
+TOTAL_DURATION_SEC = WARMUP_SEC + EVALUATION_SEC
+COOLDOWN_SEC = 60 # Cooldown to let system settle before next run
 
 RESULTS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "experiment_results")
+LOCUST_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "locustfiles", "locustfile.py")
 
-def setup_environment(mode: str, sensitivity: str):
+def setup_environment(condition: str):
     """Set environment variables for HECF and restart container."""
     env = os.environ.copy()
-    env["HECF_MODE"] = mode
     
-    if sensitivity == "tight":
-        # -20% thresholds for sensitivity analysis
-        env["GUARDRAIL_CPU_THRESHOLD"] = "64" # 80 * 0.8
-        env["GUARDRAIL_RAM_THRESHOLD"] = "72" # 90 * 0.8
+    if condition == "default_docker":
+        env["HECF_MODE"] = "default_docker"
     else:
+        env["HECF_MODE"] = "full_hecf"
         env["GUARDRAIL_CPU_THRESHOLD"] = "80"
         env["GUARDRAIL_RAM_THRESHOLD"] = "90"
         
-    logger.info("Setting HECF Mode=%s, Sensitivity=%s", mode, sensitivity)
+    logger.info("Setting HECF Condition=%s", condition)
     
     # Restart HECF container using docker-compose
     compose_dir = os.path.dirname(os.path.dirname(__file__))
@@ -51,62 +58,79 @@ def setup_environment(mode: str, sensitivity: str):
     if os.path.exists(metrics_file):
         os.remove(metrics_file)
         
-    subprocess.run(["docker", "compose", "restart", "hecf"], cwd=compose_dir, env=env)
-    # Wait for HECF to start
+    subprocess.run(["docker", "compose", "restart", "hecf"], cwd=compose_dir, env=env, check=False)
     time.sleep(5)
 
-def run_load_generator(workload: str, traffic: str):
-    """Start Locust load generator."""
-    logger.info("Starting load generator: Workload=%s, Traffic=%s", workload, traffic)
-    # Placeholder for starting locust process (e.g. via subprocess or docker API)
-    # subprocess.Popen(["locust", "-f", f"locustfiles/{workload}_{traffic}.py", "--headless", "-t", f"{EXPERIMENT_DURATION_SEC}s"])
+def run_locust(workload: str, intensity_name: str, duration: int, is_warmup: bool, run_name: str):
+    """Run Locust load generator using subprocess."""
+    intensity = INTENSITIES[intensity_name]
+    logger.info("Running Locust (Warmup=%s) for %ds: Workload=%s, Intensity=%s", is_warmup, duration, workload, intensity_name)
     
-def stop_load_generator():
-    """Stop Locust load generator."""
-    logger.info("Stopping load generator.")
-    # subprocess.run(["pkill", "-f", "locust"])
+    env = os.environ.copy()
+    env["WORKLOAD_TYPE"] = workload
+    
+    # Generate CSV results only for the main evaluation phase
+    csv_prefix_arg = []
+    if not is_warmup:
+        csv_path = os.path.join(RESULTS_DIR, f"{run_name}_locust")
+        csv_prefix_arg = ["--csv", csv_path]
+    
+    cmd = [
+        "locust", "-f", LOCUST_FILE,
+        "--host", "http://localhost:8000", # adjust if needed based on docker host port
+        "--headless",
+        "-u", str(intensity["users"]),
+        "-r", str(intensity["spawn_rate"]),
+        "--run-time", f"{duration}s"
+    ] + csv_prefix_arg
+
+    try:
+        subprocess.run(cmd, env=env, check=True)
+    except subprocess.CalledProcessError as e:
+        logger.error("Locust failed: %s", e)
 
 def run_matrix():
     if not os.path.exists(RESULTS_DIR):
         os.makedirs(RESULTS_DIR)
         
-    matrix = list(itertools.product(WORKLOADS, TRAFFIC_PATTERNS, SENSITIVITY_LEVELS, MODES))
+    matrix = list(itertools.product(CONDITIONS, WORKLOADS, list(INTENSITIES.keys()), REPLICATIONS))
     total_runs = len(matrix)
     
     logger.info("Starting experiment matrix: %d total runs", total_runs)
     
-    for idx, (workload, traffic, sensitivity, mode) in enumerate(matrix, 1):
-        run_name = f"{workload}_{traffic}_{sensitivity}_{mode}"
+    for idx, (condition, workload, intensity, rep) in enumerate(matrix, 1):
+        run_name = f"{condition}_{workload}_{intensity}_rep{rep}"
         logger.info("=" * 60)
         logger.info("RUN %d/%d: %s", idx, total_runs, run_name)
         logger.info("=" * 60)
         
-        # 1. Setup HECF
-        setup_environment(mode, sensitivity)
+        # 1. Setup Docker Environment
+        setup_environment(condition)
         
-        # 2. Cooldown before starting (Wait for system to stabilize)
-        logger.info("Waiting for cooldown/cold-start (%ds)...", COOLDOWN_DURATION_SEC)
-        # time.sleep(COOLDOWN_DURATION_SEC)
+        logger.info("Waiting for cooldown (%ds)...", COOLDOWN_SEC)
+        time.sleep(COOLDOWN_SEC)
         
-        # 3. Start Load
-        run_load_generator(workload, traffic)
+        # 2. Warmup Phase
+        run_locust(workload, intensity, WARMUP_SEC, is_warmup=True, run_name=run_name)
         
-        # 4. Wait for experiment duration
-        logger.info("Experiment running for %ds...", EXPERIMENT_DURATION_SEC)
-        # time.sleep(EXPERIMENT_DURATION_SEC)
+        # 3. Clear metrics before main evaluation
+        compose_dir = os.path.dirname(os.path.dirname(__file__))
+        metrics_file = os.path.join(compose_dir, "metrics.csv")
+        if os.path.exists(metrics_file):
+            open(metrics_file, 'w').close()
+            
+        # 4. Evaluation Phase
+        run_locust(workload, intensity, EVALUATION_SEC, is_warmup=False, run_name=run_name)
         
-        # 5. Stop Load
-        stop_load_generator()
-        
-        # 6. Archive Results
-        metrics_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "metrics.csv")
-        dest_file = os.path.join(RESULTS_DIR, f"{run_name}_metrics.csv")
+        # 5. Archive Server Metrics
+        dest_file = os.path.join(RESULTS_DIR, f"{run_name}_server_metrics.csv")
         if os.path.exists(metrics_file):
             shutil.copy2(metrics_file, dest_file)
-            logger.info("Saved results to %s", dest_file)
+            logger.info("Saved server metrics to %s", dest_file)
         else:
             logger.error("metrics.csv not found for run %s", run_name)
 
 if __name__ == "__main__":
+    # Uncomment to actually run
     # run_matrix()
     logger.info("Experiment script initialized (Dry Run). Uncomment run_matrix() to execute.")

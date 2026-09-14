@@ -9,40 +9,45 @@
 #
 # Atau buka UI: http://localhost:8089
 
-from locust import HttpUser, task, between, constant_pacing
-import random
+import os
+from locust import HttpUser, task, between
 
+# Baca WORKLOAD_TYPE dari environment variable, default ke 'all' (gabungan)
+WORKLOAD = os.environ.get("WORKLOAD_TYPE", "all").lower()
 
 class BenchUser(HttpUser):
     """
-    Simulasi user yang mengakses tiga tipe endpoint HttpArena:
+    Simulasi user yang mengakses tiga tipe endpoint HttpArena secara terisolasi atau gabungan:
     - JSON Processing (API response ringan)
     - Static Files (throughput murni)
     - Async DB (operasi database asinkron)
     """
     wait_time = between(0.1, 1.0)
 
-    @task(3)
+    @task(3 if WORKLOAD in ["json", "all"] else 0)
     def json_endpoint(self):
         """JSON Processing — workload API modern."""
+        if WORKLOAD not in ["json", "all"]: return
         with self.client.get("/", name="JSON-Processing", catch_response=True) as resp:
             if resp.status_code == 200:
                 resp.success()
             else:
                 resp.failure(f"HTTP {resp.status_code}")
 
-    @task(2)
+    @task(2 if WORKLOAD in ["static", "all"] else 0)
     def static_endpoint(self):
         """Static Files — throughput murni."""
+        if WORKLOAD not in ["static", "all"]: return
         with self.client.get("/static/dummy.txt", name="Static-Files", catch_response=True) as resp:
             if resp.status_code == 200:
                 resp.success()
             else:
                 resp.failure(f"HTTP {resp.status_code}")
 
-    @task(2)
+    @task(2 if WORKLOAD in ["db", "all"] else 0)
     def db_endpoint(self):
         """Async DB — operasi database asinkron."""
+        if WORKLOAD not in ["db", "all"]: return
         with self.client.get("/db", name="Async-DB", catch_response=True) as resp:
             if resp.status_code == 200:
                 resp.success()
