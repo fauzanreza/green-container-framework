@@ -4,6 +4,12 @@ Dokumen ini adalah panduan lengkap khusus untuk mengeksekusi pengujian (testing)
 
 > **⚠️ Catatan Penting:** Semua perintah terminal di bawah ini dijalankan dari folder `~/portfolio-app` di server (`srv-laptop`). Akses server via SSH: `ssh srv-laptop`, lalu `cd ~/portfolio-app`.
 
+> **💡 PENTING: Hubungan "Skenario Demo" vs "72 Skenario Penelitian"**
+> Jangan bingung antara Skenario Demo (1, 2, 3, 4) dengan Eksperimen 72 Skenario. Keduanya **TIDAK saling menggantikan**, melainkan punya urutan waktu dan fungsi yang berbeda:
+> 
+> 1. **Tahap 1 - Pengumpulan Data Tesis (72 Skenario)** $\rightarrow$ Lihat **Bagian 5**. Dilakukan HANYA untuk mendapatkan data statistik (CSV/grafik) untuk Bab IV Laporan Tesis kamu. Ini dilakukan jauh hari sebelum sidang menggunakan skrip otomatis.
+> 2. **Tahap 2 - Presentasi Sidang (Skenario Demo 1-4)** $\rightarrow$ Lihat bagian **Skenario Khusus** di bawah. Digunakan HANYA saat kamu sedang bimbingan/sidang berhadapan dengan dosen. Karena dosen tidak mungkin menunggu kamu menjalankan 72 tes yang memakan waktu berjam-jam, kamu menggunakan Skenario Demo ini untuk pembuktian visual secara *live* (hanya 1 menit) bahwa sistemmu benar-benar bekerja.
+
 ---
 
 ## 📋 Referensi Cepat: Daftar Service & Port
@@ -206,6 +212,14 @@ Menidurkan sementara container agar CPU 0% tanpa mematikan data RAM:
 ## 5. Otomasi Pengujian 72 Skenario (Eksperimen Lengkap)
 Untuk penelitian, skrip otomatis berikut akan mengeksekusi 72 skenario pengujian beruntun (kombinasi HECF On/Off, beban locust, repetisi).
 
+### 🎯 Kriteria Kesuksesan (Expected Results)
+Berdasarkan dokumen PRD, setelah skrip eksperimen dan analisis dijalankan, pengujian dinyatakan **BERHASIL** jika memenuhi target berikut:
+1. **SLA Terjaga (Metrik 4):** Latensi Web Persentil 95 (P95) tetap **di bawah 500ms** meskipun target sedang dilimit oleh HECF.
+2. **Hemat Energi (Metrik 3):** Total konsumsi energi (Joule/kWh) berkurang sebesar **10% - 20%** dibandingkan *baseline* Docker biasa.
+3. **Overhead Ringan (Metrik 5):** Proses HECF itu sendiri memakan memori dan CPU **kurang dari 5%** dari total kapasitas server.
+4. **Stabilitas Terjaga (Guardrail):** Tidak terjadi hang atau *Out-Of-Memory* (OOM) pada server saat diberi beban ekstrem (profil *Spike*).
+
+### Eksekusi Skrip
 * **Menjalankan Eksperimen:**
   ```bash
   python3 ../green-container-framework/experiments/run_experiment.py
