@@ -71,13 +71,22 @@ def run_locust(workload: str, intensity_name: str, duration: int, is_warmup: boo
     
     # Generate CSV results only for the main evaluation phase
     csv_prefix_arg = []
+    container_csv_path = f"/tmp/{run_name}_locust"
     if not is_warmup:
-        csv_path = os.path.join(RESULTS_DIR, f"{run_name}_locust")
-        csv_prefix_arg = ["--csv", csv_path]
+        csv_prefix_arg = ["--csv", container_csv_path]
     
+    # Map workload to host
+    hosts = {
+        "json": "http://bench-json:8000",
+        "static": "http://portfolio-web:80",
+        "db": "http://shopyvibe-app:3000"
+    }
+    target_host = hosts.get(workload, "http://bench-json:8000")
+
     cmd = [
-        "locust", "-f", LOCUST_FILE,
-        "--host", "http://localhost:8000", # adjust if needed based on docker host port
+        "docker", "exec", "locust-master",
+        "locust", "-f", "/mnt/locust/locustfile.py",
+        "--host", target_host,
         "--headless",
         "-u", str(intensity["users"]),
         "-r", str(intensity["spawn_rate"]),
@@ -86,6 +95,11 @@ def run_locust(workload: str, intensity_name: str, duration: int, is_warmup: boo
 
     try:
         subprocess.run(cmd, env=env, check=True)
+        if not is_warmup:
+            for suffix in ["_stats.csv", "_stats_history.csv", "_failures.csv", "_exceptions.csv"]:
+                src = f"locust-master:{container_csv_path}{suffix}"
+                dst = os.path.join(RESULTS_DIR, f"{run_name}_locust{suffix}")
+                subprocess.run(["docker", "cp", src, dst], check=False)
     except subprocess.CalledProcessError as e:
         logger.error("Locust failed: %s", e)
 
