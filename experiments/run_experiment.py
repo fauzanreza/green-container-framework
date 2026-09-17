@@ -131,6 +131,4 @@ def run_matrix():
             logger.error("metrics.csv not found for run %s", run_name)
 
 if __name__ == "__main__":
-    # Uncomment to actually run
-    # run_matrix()
-    logger.info("Experiment script initialized (Dry Run). Uncomment run_matrix() to execute.")
+    run_matrix()
