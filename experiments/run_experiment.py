@@ -93,8 +93,11 @@ def run_locust(workload: str, intensity_name: str, duration: int, is_warmup: boo
         "--run-time", f"{duration}s"
     ] + csv_prefix_arg
 
+    log_file_path = os.path.join(RESULTS_DIR, f"{run_name}_locust_{'warmup' if is_warmup else 'eval'}.log")
+    
     try:
-        subprocess.run(cmd, env=env, check=True)
+        with open(log_file_path, "a") as log_file:
+            subprocess.run(cmd, env=env, check=True, stdout=log_file, stderr=subprocess.STDOUT)
         if not is_warmup:
             for suffix in ["_stats.csv", "_stats_history.csv", "_failures.csv", "_exceptions.csv"]:
                 src = f"locust-master:{container_csv_path}{suffix}"
