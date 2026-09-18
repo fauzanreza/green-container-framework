@@ -108,7 +108,29 @@ def run_locust(workload: str, intensity_name: str, duration: int, is_warmup: boo
             log_file.write(f"Phase        : {'Warmup' if is_warmup else 'Evaluation'}\n")
             log_file.write(f"Duration     : {duration} seconds\n")
             log_file.write(f"============================================================\n\n")
-            subprocess.run(cmd, env=env, check=True, stdout=log_file, stderr=subprocess.STDOUT)
+            
+            process = subprocess.Popen(cmd, env=env, stdout=log_file, stderr=subprocess.STDOUT)
+            start_time = time.time()
+            while True:
+                ret = process.poll()
+                if ret is not None:
+                    if ret != 0:
+                        print() # Prevent overwriting error message
+                        raise subprocess.CalledProcessError(ret, cmd)
+                    break
+                    
+                elapsed = time.time() - start_time
+                progress = min(1.0, elapsed / duration)
+                bar_len = 40
+                filled = int(bar_len * progress)
+                bar = '█' * filled + '-' * (bar_len - filled)
+                remaining = int(max(0, duration - elapsed))
+                
+                # Print dynamic progress bar
+                print(f"\r  \033[36mProgress:\033[0m [{bar}] {progress*100:.1f}% ({remaining}s remaining)", end="", flush=True)
+                time.sleep(1)
+                
+            print(f"\r  \033[32mProgress:\033[0m [{'█'*40}] 100.0% (0s remaining)\n", flush=True)
         if not is_warmup:
             for suffix in ["_stats.csv", "_stats_history.csv", "_failures.csv", "_exceptions.csv"]:
                 src = f"locust-master:{container_csv_path}{suffix}"
