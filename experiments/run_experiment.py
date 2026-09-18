@@ -35,6 +35,7 @@ TOTAL_DURATION_SEC = WARMUP_SEC + EVALUATION_SEC
 COOLDOWN_SEC = 60 # Cooldown to let system settle before next run
 
 RESULTS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "experiment_results")
+SESSION_TIMESTAMP = time.strftime("%Y%m%d_%H%M%S")
 LOCUST_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "locustfiles", "locustfile.py")
 
 def setup_environment(condition: str):
@@ -93,10 +94,22 @@ def run_locust(workload: str, intensity_name: str, duration: int, is_warmup: boo
         "--run-time", f"{duration}s"
     ] + csv_prefix_arg
 
-    log_file_path = os.path.join(RESULTS_DIR, f"{run_name}_locust_{'warmup' if is_warmup else 'eval'}.log")
+    log_file_path = os.path.join(RESULTS_DIR, f"{run_name}_locust_{'warmup' if is_warmup else 'eval'}_{SESSION_TIMESTAMP}.log")
     
     try:
         with open(log_file_path, "a") as log_file:
+            # Write a clear header so the user knows what iteration and parameters they are looking at
+            log_file.write(f"============================================================\n")
+            log_file.write(f"HECF EXPERIMENT LOG\n")
+            log_file.write(f"Timestamp    : {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            log_file.write(f"Run Name     : {run_name}\n")
+            log_file.write(f"Condition    : {condition}\n")
+            log_file.write(f"Workload     : {workload}\n")
+            log_file.write(f"Intensity    : {intensity_name} (Users: {intensity['users']}, Spawn Rate: {intensity['spawn_rate']})\n")
+            log_file.write(f"Replication  : {rep}\n")
+            log_file.write(f"Phase        : {'Warmup' if is_warmup else 'Evaluation'}\n")
+            log_file.write(f"Duration     : {duration} seconds\n")
+            log_file.write(f"============================================================\n\n")
             subprocess.run(cmd, env=env, check=True, stdout=log_file, stderr=subprocess.STDOUT)
         if not is_warmup:
             for suffix in ["_stats.csv", "_stats_history.csv", "_failures.csv", "_exceptions.csv"]:
