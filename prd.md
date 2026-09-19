@@ -259,7 +259,7 @@ Runtime-selectable mode via environment variable:
   Energy Consumption, Web Latency (SLA), Framework Overhead.
 - **Controlled variables:** identical hardware, OS, Docker Engine version, workload
   type/volume, and experiment duration across all runs.
-- **Duration/replication:** ≥30 minutes per run with 5-minute warm-up excluded,
+- **Duration/replication:** 20 minutes per run (5-minute warm-up excluded, 15-minute steady-state evaluation),
   replicated 3×.
 - **Total executions:** `2 conditions × 3 HttpArena workload types × 4 load levels
   × 3 replications = 72 individual executions`, reproducible via

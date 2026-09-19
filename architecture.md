@@ -387,7 +387,8 @@ the codebase.
 
 `run_experiment.py` orchestrates the full design matrix:
 `2 conditions × 3 HttpArena workload types × 4 load levels × 3 replications = 72 executions`.
-Each run: 30 minutes minimum + 5-minute warm-up (excluded from analysis).
+Each run: 20 minutes total (5-minute warm-up + 15-minute steady-state evaluation).
+
 
 `baselines/` — configuration presets for the 3 comparison baselines:
 
