@@ -36,9 +36,11 @@ EVALUATION_SEC = 900 # 15 minutes
 TOTAL_DURATION_SEC = WARMUP_SEC + EVALUATION_SEC
 COOLDOWN_SEC = 0 # No cooldown to keep exactly 20 mins per run
 
-RESULTS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "experiment_results")
+PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # green-container-framework/
+COMPOSE_DIR = os.path.join(os.path.dirname(PROJECT_DIR), "portfolio-app")  # ../portfolio-app/ (main docker-compose.yml)
+RESULTS_DIR = os.path.join(PROJECT_DIR, "experiment_results")
 SESSION_TIMESTAMP = time.strftime("%Y%m%d_%H%M%S")
-LOCUST_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "locustfiles", "locustfile.py")
+LOCUST_FILE = os.path.join(PROJECT_DIR, "locustfiles", "locustfile.py")
 
 def setup_environment(condition: str):
     """Set environment variables for HECF and restart container."""
@@ -53,17 +55,15 @@ def setup_environment(condition: str):
         
     logger.info("Setting HECF Condition=%s", condition)
     
-    # Restart HECF container using docker-compose
-    compose_dir = os.path.dirname(os.path.dirname(__file__))
-    
     # Create or clear metrics.csv without breaking Docker bind mount (preserve inode)
-    metrics_file = os.path.join(compose_dir, "metrics.csv")
+    metrics_file = os.path.join(PROJECT_DIR, "metrics.csv")
     open(metrics_file, 'w').close()
         
-    subprocess.run(["docker", "compose", "up", "-d", "hecf"], cwd=compose_dir, env=env, check=False)
+    # Restart HECF container using docker-compose from portfolio-app directory
+    subprocess.run(["docker", "compose", "up", "-d", "hecf"], cwd=COMPOSE_DIR, env=env, check=False)
     time.sleep(5)
 
-def run_locust(workload: str, intensity_name: str, duration: int, is_warmup: bool, run_name: str, global_ctx: dict = None):
+def run_locust(condition: str, workload: str, intensity_name: str, duration: int, is_warmup: bool, run_name: str, global_ctx: dict = None):
     """Run Locust load generator using subprocess."""
     intensity = INTENSITIES[intensity_name]
     logger.info("Running Locust (Warmup=%s) for %ds: Workload=%s, Intensity=%s", is_warmup, duration, workload, intensity_name)
@@ -152,7 +152,7 @@ def run_locust(workload: str, intensity_name: str, duration: int, is_warmup: boo
     except subprocess.CalledProcessError as e:
         logger.error("Locust failed: %s", e)
 
-def run_matrix():
+def run_matrix(is_demo=False):
     if not os.path.exists(RESULTS_DIR):
         os.makedirs(RESULTS_DIR)
         
@@ -167,7 +167,7 @@ def run_matrix():
     }
     
     for idx, (condition, workload, intensity, rep) in enumerate(matrix, 1):
-        run_name = f"{condition}_{workload}_{intensity}_rep{rep}"
+        run_name = f"demo_{condition}_{workload}_{intensity}_rep{rep}" if is_demo else f"{condition}_{workload}_{intensity}_rep{rep}"
         logger.info("=" * 60)
         logger.info("RUN %d/%d: %s", idx, total_runs, run_name)
         logger.info("=" * 60)
@@ -180,16 +180,15 @@ def run_matrix():
             time.sleep(COOLDOWN_SEC)
         
         # 2. Warmup Phase
-        run_locust(workload, intensity, WARMUP_SEC, is_warmup=True, run_name=run_name, global_ctx=global_ctx)
+        run_locust(condition, workload, intensity, WARMUP_SEC, is_warmup=True, run_name=run_name, global_ctx=global_ctx)
         
         # 3. Clear metrics before main evaluation
-        compose_dir = os.path.dirname(os.path.dirname(__file__))
-        metrics_file = os.path.join(compose_dir, "metrics.csv")
+        metrics_file = os.path.join(PROJECT_DIR, "metrics.csv")
         if os.path.exists(metrics_file):
             open(metrics_file, 'w').close()
             
         # 4. Evaluation Phase
-        run_locust(workload, intensity, EVALUATION_SEC, is_warmup=False, run_name=run_name, global_ctx=global_ctx)
+        run_locust(condition, workload, intensity, EVALUATION_SEC, is_warmup=False, run_name=run_name, global_ctx=global_ctx)
         
         # 5. Archive Server Metrics
         dest_file = os.path.join(RESULTS_DIR, f"{run_name}_server_metrics.csv")
@@ -220,4 +219,4 @@ if __name__ == "__main__":
         EVALUATION_SEC = 25
         COOLDOWN_SEC = 0
 
-    run_matrix()
+    run_matrix(is_demo=args.demo)
