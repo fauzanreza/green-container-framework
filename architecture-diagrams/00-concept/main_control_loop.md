@@ -36,7 +36,7 @@ flowchart TD
 
         L3B["<b>Layer 3B:</b> tier_detector.add_sample(name, cpu)<br/>tier_int = tier_detector.get_tier(name)<br/><i>P95/P50 + Hysteresis</i>"]
         L3C["<b>Layer 3C:</b> ema_pred = predictor.update(name, cpu)<br/><i>Y(t) = α × cpu + (1-α) × Y(t-1)</i>"]
-        L3A["<b>Layer 3A:</b> guardrail.update(name, cpu, mem, ema_pred)<br/><i>3-of-5 rolling + PSI + EMA threshold adjust</i>"]
+        L3A["<b>Layer 3A:</b> guardrail.update(name, cpu, mem, ema_pred)<br/><i>3-of-5 rolling + PSI (Pressure Stall Information) + EMA threshold adjust</i>"]
 
         EDOS_CHECK{"[Security] EDoS<br/>action=freeze?"}
         EDOS_FREEZE["action = EDOS_FREEZE<br/>micro_freezer._freeze(name, id)"]
@@ -245,3 +245,14 @@ Diagram di atas merupakan visualisasi dari logika *loop* utama yang berjalan di 
    - Jika tidak menganggur, `main.py` akan melihat kesimpulan dari Guardrail dan Tier Detector, menghitung batasan angka (kuota), lalu menyuruh `shaper.py` menulis kuota tersebut ke sistem operasi.
 
 Semua langkah ini diulang terus-menerus untuk setiap kontainer, menghasilkan aliran data yang lancar antar file algoritma.
+
+---
+
+## 📖 Glosarium (Keterangan Istilah Teknis)
+
+Untuk mempermudah pemahaman arsitektur, berikut adalah penjelasan singkat mengenai istilah-istilah teknis yang digunakan:
+
+*   **Hysteresis**: Mekanisme penundaan perubahan status untuk mencegah osilasi (perubahan aksi yang terlalu cepat dan berulang) saat terjadi fluktuasi beban yang bersifat sementara.
+*   **eBPF (Extended Berkeley Packet Filter)**: Teknologi sistem Linux yang memungkinkan eksekusi program pemantauan secara cepat dan aman di dalam kernel tanpa memodifikasi kode inti OS.
+*   **EDoS (Economic Denial of Sustainability)**: Varian serangan siber yang tidak bertujuan mematikan server, melainkan mengeksploitasi komputasi secara konstan agar tagihan infrastruktur cloud perusahaan meningkat drastis.
+*   **Adaptive Sampling**: Teknik pemantauan dinamis di mana sistem secara otomatis mempercepat interval pengumpulan data saat mendeteksi adanya lonjakan beban kritis operasional.

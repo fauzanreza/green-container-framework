@@ -17,7 +17,7 @@ flowchart TB
 
             L2["<b>Layer 2: Monitoring Engine</b><br/><i>monitor.py</i><br/>───────────────<br/>• cgroupfs v2 Direct Read<br/>• Adaptive Sampling<br/>• Event-Driven Idle Detection"]
 
-            L3["<b>Layer 3: Hybrid Control Engine</b><br/><i>guardrail.py, tier_detector.py, predictor.py</i><br/>───────────────<br/>• 3A: Guardrail (3-of-5 + PSI)<br/>• 3B: Tier Detector (P95/P50)<br/>• 3C: EMA Predictor (α=0.2)"]
+            L3["<b>Layer 3: Hybrid Control Engine</b><br/><i>guardrail.py, tier_detector.py, predictor.py</i><br/>───────────────<br/>• 3A: Guardrail (3-of-5 + PSI (Pressure Stall Information))<br/>• 3B: Tier Detector (P95/P50)<br/>• 3C: EMA Predictor (α=0.2)"]
 
             L4["<b>Layer 4: Adaptive Resource Shaping</b><br/><i>shaper.py, micro_freezer.py</i><br/>───────────────<br/>• cpu.max / memory.max Write<br/>• Micro-Freezing (cgroup.freeze)<br/>• TCP Backlog Buffering"]
 
@@ -128,7 +128,7 @@ Layer ini adalah otak kecerdasan (S2) dari HECF yang terdiri dari 3 algoritma ya
 *   **`framework/guardrail.py` (3A)**: Mengambil hasil prediksi dari `predictor.py` dan data dari `tier_detector.py`. Jika diprediksi akan terjadi _overload_ (kehabisan CPU) yang parah, Guardrail akan membunyikan alarm darurat.
 
 ### 5. Layer 4: Adaptive Resource Shaping (Execute)
-*   **`framework/shaper.py`**: Menerima keputusan (Tier dan status Guardrail) dari Layer 3, lalu bertindak sebagai eksekutor yang menulis angka limit (quota) CPU dan Memory ke file kernel cgroups Linux (`cpu.max`, dll).
+*   **`framework/shaper.py`**: Menerima keputusan (Tier dan status Guardrail) dari Layer 3, lalu bertindak sebagai eksekutor yang menulis angka limit (quota) CPU dan Memory ke file kernel cgroups Linux (seperti `cpu.max`, `memory.max`, dan `cgroup.freeze`).
 *   **`framework/security/micro_freezer.py`**: Jika Layer 2 mendeteksi kontainer sedang benar-benar diam/idle, algoritma ini dipanggil untuk "membekukan" (freeze) kontainer sementara demi menghemat energi, tanpa mematikannya.
 
 ### 6. Supplementary (Knowledge / Pendukung)
@@ -138,3 +138,15 @@ Layer ini adalah otak kecerdasan (S2) dari HECF yang terdiri dari 3 algoritma ya
 
 *Untuk melihat alur loop yang menyambungkan semua file ini, silakan lanjut ke file `main_control_loop.md`.*
 
+---
+
+## 📖 Glosarium (Keterangan Istilah Teknis)
+
+Untuk mempermudah pemahaman arsitektur, berikut adalah penjelasan singkat mengenai istilah-istilah teknis yang digunakan:
+
+*   **MAPE-K (Monitor, Analyze, Plan, Execute, Knowledge)**: Model arsitektur sistem otonom yang secara terus-menerus memantau kondisi, menganalisis data, merencanakan tindakan, dan mengeksekusi penyesuaian secara terotomatisasi.
+*   **cgroups v2**: Fitur manajemen sumber daya pada kernel Linux yang berfungsi untuk mengukur dan membatasi alokasi komputasi (seperti CPU dan Memori) untuk setiap *container*.
+*   **PSI (Pressure Stall Information)**: Metrik bawaan kernel Linux yang memberikan indikasi langsung mengenai tingkat saturasi atau kepadatan antrean pemrosesan sistem.
+*   **P95 / P50 (Percentile)**: Metrik statistik distribusi beban. P50 (Median) merepresentasikan beban normal, sedangkan P95 mengindikasikan lonjakan beban ekstrem (*spiky workload*).
+*   **EMA (Exponential Moving Average)**: Algoritma peramalan (*forecasting*) yang memberikan bobot lebih besar pada data terbaru untuk memprediksi tren pemakaian sumber daya secara *real-time*.
+*   **RAPL (Running Average Power Limit)**: Antarmuka sensor dari prosesor (Intel/AMD) yang menyediakan data pengukuran konsumsi daya listrik (Watt) perangkat keras tingkat dasar.
