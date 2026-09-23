@@ -1,10 +1,10 @@
 # Flowchart — EMAPredictor.update() (Layer 3C)
 
 > **Kode Sumber:** `framework/predictor.py` → class `EMAPredictor`, fungsi `update()` (baris 15–29)
-> **Posisi di Diagram:** Layer 3 — Hybrid Control Engine → 3C EMA Predictor (α=0.2)
+> **Posisi di Diagram:** Layer 3 — Hybrid Control Engine → 3C EMA Predictor (Adaptive α)
 > **Kategori:** 🌟 INOVASI ALGORITMA (S2)
 
-Algoritma **Proactive Time-Series Forecasting** menggunakan Exponential Moving Average dengan memori O(1). Hanya menyimpan satu nilai per container (Y(t-1)) — sangat ringan. Hasilnya digunakan untuk menyesuaikan sensitivitas Guardrail secara proaktif.
+Algoritma **Proactive Time-Series Forecasting** menggunakan Exponential Moving Average dengan *Adaptive Alpha* berdasarkan varians CPU. Alpha bergeser dinamis antara 0.05 (stabil) hingga 0.8 (lonjakan) untuk pelacakan cepat. Hasilnya (dan turunannya d(EMA)/dt) digunakan untuk memicu pemotongan proaktif di Guardrail.
 
 ```mermaid
 flowchart TD
@@ -15,8 +15,10 @@ flowchart TD
     RETURN_INIT(["Return cpu"])
 
     GET_PREV["Get Y(t-1) dari predictions"]
+    
+    CALC_VAR["Hitung varians dari 10 sampel terakhir:<br/>High > 400 → α=0.8<br/>Med > 100 → α=0.4<br/>Low ≤ 100 → α=0.05"]
 
-    CALC["<b>EMA Formula:</b><br/>Y(t) = α × CPU(t) + (1-α) × Y(t-1)<br/><br/>α = 0.2:<br/>Y(t) = 0.2 × CPU(t) + 0.8 × Y(t-1)"]
+    CALC["<b>EMA Formula:</b><br/>Y(t) = α(t) × CPU(t) + (1-α(t)) × Y(t-1)"]
 
     SAVE["Simpan predictions[name] = Y(t)"]
 
@@ -26,7 +28,8 @@ flowchart TD
     FIRST -->|Ya| INIT
     INIT --> RETURN_INIT
     FIRST -->|Tidak| GET_PREV
-    GET_PREV --> CALC
+    GET_PREV --> CALC_VAR
+    CALC_VAR --> CALC
     CALC --> SAVE
     SAVE --> RETURN
 ```
@@ -60,9 +63,9 @@ flowchart TD
 
 ## Mengapa Ini Inovasi S2?
 
-1. **O(1) Memory Complexity:** Hanya menyimpan satu float per container. Tidak ada array historis, tidak ada model ML, tidak ada dependency berat.
-2. **Proactive, Bukan Reactive:** EMA memprediksi tren *sebelum* CPU benar-benar melewati threshold, memberikan jeda waktu 1–2 sampel bagi Guardrail untuk bertindak lebih awal.
-3. **Anti-ML by Design:** Tesis ini secara sadar menolak ML/DL karena justru akan menambah konsumsi energi (menyalahi tujuan penelitian). EMA adalah solusi matematis yang optimal untuk constraint ini.
+1. **Adaptive Alpha:** Tidak lagi terjebak trade-off antara noise vs responsiveness. Saat stabil α=0.05 (menekan noise), saat ada burst α=0.8 (bereaksi 16× lebih cepat).
+2. **Derivative-Based Proactivity:** Menghasilkan sinyal d(EMA)/dt yang memungkinkan Guardrail memotong spike *sebelum* CPU mencapai limit atas, menekan kemungkinan OOM/starvation di level host.
+3. **Anti-ML by Design:** Tesis ini secara sadar menolak ML/DL karena justru akan menambah konsumsi energi (menyalahi tujuan penelitian). EMA + Varians adalah solusi matematis yang ringan namun sangat optimal.
 
 ---
 
@@ -78,8 +81,13 @@ flowchart TD
     MULAI["Gunakan nilai CPU aktual<br/>sebagai nilai historis awal"]
     
     AMBIL["Ambil nilai prediksi<br/>sebelumnya Y(t-1)"]
-    HITUNG["Hitung EMA (Alpha = 0.2):<br/>20% nilai aktual saat ini +<br/>80% nilai historis terbobot"]
-    SIMPAN["Simpan Y(t) untuk siklus<br/>berikutnya"]
+    VARIANS{"Hitung Varians<br/>10 Sampel Terakhir"}
+    
+    ALPHA_TINGGI["Varians Tinggi (Burst):<br/>Gunakan Alpha 0.8"]
+    ALPHA_RENDAH["Varians Rendah (Stabil):<br/>Gunakan Alpha 0.05"]
+    
+    HITUNG["Hitung EMA Baru:<br/>α * Aktual + (1-α) * Historis"]
+    SIMPAN["Simpan Y(t) dan sediakan d(EMA)/dt<br/>untuk Guardrail"]
     
     SELESAI(["END: Kembalikan Prediksi Y(t)"])
 
@@ -87,7 +95,12 @@ flowchart TD
     PERTAMA -->|Ya| MULAI
     MULAI --> SELESAI
     PERTAMA -->|Tidak| AMBIL
-    AMBIL --> HITUNG
+    AMBIL --> VARIANS
+    VARIANS -->|Spike| ALPHA_TINGGI
+    VARIANS -->|Stabil| ALPHA_RENDAH
+    
+    ALPHA_TINGGI --> HITUNG
+    ALPHA_RENDAH --> HITUNG
     HITUNG --> SIMPAN
     SIMPAN --> SELESAI
 ```

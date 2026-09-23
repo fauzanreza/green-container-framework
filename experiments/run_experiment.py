@@ -11,6 +11,7 @@ import logging
 import itertools
 import subprocess
 import argparse
+from generate_notebook import create_analysis_notebook
 
 # Configure logging
 logging.basicConfig(
@@ -63,7 +64,7 @@ def setup_environment(condition: str):
     subprocess.run(["docker", "compose", "up", "-d", "hecf"], cwd=COMPOSE_DIR, env=env, check=False)
     time.sleep(5)
 
-def run_locust(condition: str, workload: str, intensity_name: str, duration: int, is_warmup: bool, run_name: str, global_ctx: dict = None):
+def run_locust(condition: str, workload: str, intensity_name: str, duration: int, is_warmup: bool, run_name: str, run_dir: str, global_ctx: dict = None):
     """Run Locust load generator using subprocess."""
     intensity = INTENSITIES[intensity_name]
     logger.info("Running Locust (Warmup=%s) for %ds: Workload=%s, Intensity=%s", is_warmup, duration, workload, intensity_name)
@@ -95,7 +96,7 @@ def run_locust(condition: str, workload: str, intensity_name: str, duration: int
         "--run-time", f"{duration}s"
     ] + csv_prefix_arg
 
-    log_file_path = os.path.join(RESULTS_DIR, f"{run_name}_locust_{'warmup' if is_warmup else 'eval'}_{SESSION_TIMESTAMP}.log")
+    log_file_path = os.path.join(run_dir, f"{run_name}_locust_{'warmup' if is_warmup else 'eval'}_{SESSION_TIMESTAMP}.log")
     
     try:
         with open(log_file_path, "a") as log_file:
@@ -117,7 +118,7 @@ def run_locust(condition: str, workload: str, intensity_name: str, duration: int
                 if ret is not None:
                     if ret != 0:
                         print() # Prevent overwriting error message
-                        raise subprocess.CalledProcessError(ret, cmd)
+                        logger.warning("Locust exited with status %d (Kemungkinan ada HTTP Request gagal akibat server overload, wajar saat Spike).", ret)
                     break
                     
                 elapsed = time.time() - start_time
@@ -147,7 +148,7 @@ def run_locust(condition: str, workload: str, intensity_name: str, duration: int
         if not is_warmup:
             for suffix in ["_stats.csv", "_stats_history.csv", "_failures.csv", "_exceptions.csv"]:
                 src = f"locust-master:{container_csv_path}{suffix}"
-                dst = os.path.join(RESULTS_DIR, f"{run_name}_locust{suffix}")
+                dst = os.path.join(run_dir, f"{run_name}_locust{suffix}")
                 subprocess.run(["docker", "cp", src, dst], check=False)
     except subprocess.CalledProcessError as e:
         logger.error("Locust failed: %s", e)
@@ -168,6 +169,13 @@ def run_matrix(is_demo=False):
     
     for idx, (condition, workload, intensity, rep) in enumerate(matrix, 1):
         run_name = f"demo_{condition}_{workload}_{intensity}_rep{rep}" if is_demo else f"{condition}_{workload}_{intensity}_rep{rep}"
+        
+        # Create nested directory structure under a unique session folder
+        # Adding 'workload' layer to ensure experiments don't mix when workloads vary
+        session_folder = f"test_session_{SESSION_TIMESTAMP}"
+        run_dir = os.path.join(RESULTS_DIR, session_folder, condition, workload, intensity.lower(), f"rep_{rep}")
+        os.makedirs(run_dir, exist_ok=True)
+        
         logger.info("=" * 60)
         logger.info("RUN %d/%d: %s", idx, total_runs, run_name)
         logger.info("=" * 60)
@@ -180,7 +188,7 @@ def run_matrix(is_demo=False):
             time.sleep(COOLDOWN_SEC)
         
         # 2. Warmup Phase
-        run_locust(condition, workload, intensity, WARMUP_SEC, is_warmup=True, run_name=run_name, global_ctx=global_ctx)
+        run_locust(condition, workload, intensity, WARMUP_SEC, is_warmup=True, run_name=run_name, run_dir=run_dir, global_ctx=global_ctx)
         
         # 3. Clear metrics before main evaluation
         metrics_file = os.path.join(PROJECT_DIR, "metrics.csv")
@@ -188,20 +196,26 @@ def run_matrix(is_demo=False):
             open(metrics_file, 'w').close()
             
         # 4. Evaluation Phase
-        run_locust(condition, workload, intensity, EVALUATION_SEC, is_warmup=False, run_name=run_name, global_ctx=global_ctx)
+        run_locust(condition, workload, intensity, EVALUATION_SEC, is_warmup=False, run_name=run_name, run_dir=run_dir, global_ctx=global_ctx)
         
         # 5. Archive Server Metrics
-        dest_file = os.path.join(RESULTS_DIR, f"{run_name}_server_metrics.csv")
+        dest_file = os.path.join(run_dir, f"{run_name}_server_metrics.csv")
         if os.path.exists(metrics_file):
             shutil.copy2(metrics_file, dest_file)
             logger.info("Saved server metrics to %s", dest_file)
         else:
             logger.error("metrics.csv not found for run %s", run_name)
 
+    logger.info("Generating Jupyter Notebook Analysis...")
+    session_dir = os.path.join(RESULTS_DIR, f"test_session_{SESSION_TIMESTAMP}")
+    try:
+        create_analysis_notebook(session_dir)
+    except Exception as e:
+        logger.error("Failed to generate notebook: %s", e)
+
     logger.info("=" * 60)
     logger.info("All experiments finished successfully!")
-    logger.info("To view the full Locust report of the last run, use:")
-    logger.info("  cat %s", os.path.join("experiment_results", f"{run_name}_locust_eval_{SESSION_TIMESTAMP}.log"))
+    logger.info("Check the experiment_results directory for the nested outputs.")
     logger.info("=" * 60)
 
 if __name__ == "__main__":

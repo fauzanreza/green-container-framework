@@ -16,11 +16,15 @@ GUARDRAIL_RAM_THRESHOLD  = float(os.getenv("HECF_GUARDRAIL_RAM_THRESHOLD", 90.0)
 
 # === Tier Detection (Layer 3B) ===
 TIER_WINDOW              = int(os.getenv("HECF_TIER_WINDOW", 120))
-COLD_START_SAMPLES       = int(os.getenv("HECF_COLD_START_SAMPLES", 30))  # revised: 120×30s > 30min run
+TIER_SHORT_WINDOW        = int(os.getenv("HECF_TIER_SHORT_WINDOW", 10))    # Dual-window: burst detection
+TIER_LONG_WINDOW         = int(os.getenv("HECF_TIER_LONG_WINDOW", 60))     # Dual-window: baseline trending
+COLD_START_SAMPLES       = int(os.getenv("HECF_COLD_START_SAMPLES", 10))  # revised: 10×30s = 5min warmup (fits 20min test runs)
 FALLBACK_TIER            = int(os.getenv("HECF_FALLBACK_TIER", 2))
 TIER1_AGGRESSIVE_RATIO   = float(os.getenv("HECF_TIER1_RATIO", 2.0))
 TIER2_BALANCED_RATIO     = float(os.getenv("HECF_TIER2_RATIO", 1.5))
 TIER_HYSTERESIS_SAMPLES  = int(os.getenv("HECF_TIER_HYSTERESIS", 3))
+TIER_HYSTERESIS_ESCALATE = int(os.getenv("HECF_TIER_HYSTERESIS_ESCALATE", 1))  # Asymmetric: fast escalation
+TIER_HYSTERESIS_DEESCALATE = int(os.getenv("HECF_TIER_HYSTERESIS_DEESCALATE", 5))  # Asymmetric: slow de-escalation
 
 # === Predictor (Layer 3C) ===
 EMA_ALPHA                = float(os.getenv("HECF_EMA_ALPHA", 0.2))
@@ -76,7 +80,7 @@ SECURITY_ENABLED         = os.getenv("HECF_SECURITY_ENABLED", "true").lower() ==
 
 # === Micro-Freezing (Layer 4 ext, §10.5/§10.8) ===
 MICRO_FREEZE_ENABLED     = os.getenv("HECF_MICRO_FREEZE_ENABLED", "true").lower() == "true"
-MICRO_FREEZE_IDLE_TRIGGER_S  = float(os.getenv("HECF_MICRO_FREEZE_IDLE_S", 2.0))
+MICRO_FREEZE_IDLE_TRIGGER_S  = float(os.getenv("HECF_MICRO_FREEZE_IDLE_S", 0.8))
 MICRO_FREEZE_MAX_DURATION_MS = float(os.getenv("HECF_MICRO_FREEZE_MAX_MS", 1000.0))
 
 # === TCP Backlog (Layer 4 ext, §10.5) ===
@@ -155,8 +159,9 @@ CRITICAL_PORTS_PRIORITY = {
 
 # === Network-Infra Auto-Priority Patterns (image/name matching, Gap #15) ===
 NETWORK_INFRA_PATTERNS   = ["nginx", "caddy", "traefik", "cloudflared",
-                            "coredns", "haproxy", "envoy"]
+                            "coredns", "haproxy", "envoy", "tailscale", "tailscaled"]
 
 # Mode selection (default_docker, static_cap, reactive_only, full_hecf)
 MODE = os.getenv("HECF_MODE", "full_hecf")
 DRY_RUN = os.getenv("HECF_DRY_RUN", "False").lower() == "true"
+STRICT_WHITELIST_MODE = os.getenv("HECF_STRICT_WHITELIST", "false").lower() == "true"

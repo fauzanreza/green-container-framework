@@ -4,7 +4,7 @@
 > **Posisi di Diagram:** Layer 4 — Adaptive Resource Shaping → 4B Micro-Freezer
 > **Kategori:** 🌟 INOVASI ALGORITMA (S2)
 
-Algoritma pembekuan container tingkat milidetik (`cgroup.freeze`). Dioptimasi untuk mereduksi konsumsi CPU idle ke absolute 0% tanpa memutus koneksi TCP. Menggunakan eBPF untuk mendeteksi transaksi yang sedang berjalan (Safety Gate) dan `cgroup.events` untuk deteksi idle.
+Algoritma pembekuan container tingkat milidetik (`cgroup.freeze`). Dioptimasi untuk mereduksi konsumsi CPU idle ke absolute 0% tanpa memutus koneksi TCP. Menggunakan eBPF untuk mendeteksi transaksi yang sedang berjalan (Safety Gate) dan `cgroup.events` untuk deteksi idle. Terintegrasi dengan **Active Memory Reclaim** (`memory.reclaim`) untuk membebaskan page cache saat idle.
 
 ```mermaid
 flowchart TD
@@ -21,7 +21,7 @@ flowchart TD
 
     CALC_DURATION["frozen_duration_ms = (now - frozen_at) × 1000"]
     DURATION_EXCEEDED{"frozen_duration_ms<br/>≥ max_freeze_ms?"}
-    FORCE_THAW["Force Thaw: _thaw(id, reason='max_duration')<br/>state.frozen = False"]
+    FORCE_THAW["Force Thaw: _thaw(id, reason='max_duration')<br/>Catat cumulative_freeze_s<br/>state.frozen = False"]
     STILL_FROZEN(["Return {action: 'none',<br/>reason: 'already_frozen'}"])
 
     CALC_IDLE["idle_duration = now - state.last_activity"]
@@ -29,10 +29,10 @@ flowchart TD
     POPULATED_AVAIL{"_check_populated(id)<br/>returns value?"}
     KERNEL_ACTIVE{"populated<br/>== True?"}
     NOT_IDLE["Return {action: 'none',<br/>reason: 'populated_active'}"]
-    KERNEL_IDLE{"idle_duration<br/>≥ idle_trigger?"}
+    KERNEL_IDLE{"idle_duration<br/>≥ 0.8s (idle_trigger)?"}
     TOO_RECENT1(["Return {action: 'none',<br/>reason: 'depopulated_but_too_recent'}"])
     
-    FALLBACK_CHECK{"idle_duration<br/>≥ idle_trigger?"}
+    FALLBACK_CHECK{"idle_duration<br/>≥ 0.8s (idle_trigger)?"}
     TOO_RECENT2(["Return {action: 'none',<br/>reason: 'not_idle_enough'}"])
 
     EBPF_CHECK{"ebpf_sensor.has_open_connections(id)?"}
@@ -42,7 +42,7 @@ flowchart TD
 
     IS_DRY{"dry_run?"}
     DRY_LOG["Log '[DRY-RUN] Would FREEZE...'"]
-    WRITE_FREEZE["Tulis '1' ke cgroup.freeze<br/>via _freeze(name, id)"]
+    WRITE_FREEZE["Tulis '1' ke cgroup.freeze<br/>via _freeze(name, id)<br/>Trigger memory.reclaim"]
     UPDATE_STATE["Update state[id]:<br/>frozen=True, frozen_at=now"]
     FREEZE_RET(["Return {action: 'freeze',<br/>reason: 'idle:{duration}s'}"])
 
@@ -64,12 +64,12 @@ flowchart TD
     POPULATED_AVAIL -->|Ya| KERNEL_ACTIVE
     KERNEL_ACTIVE -->|"Ya"| NOT_IDLE
     KERNEL_ACTIVE -->|"Tidak"| KERNEL_IDLE
-    KERNEL_IDLE -->|"Tidak (< 2s)"| TOO_RECENT1
-    KERNEL_IDLE -->|"Ya (≥ 2s)"| EBPF_CHECK
+    KERNEL_IDLE -->|"Tidak (< 0.8s)"| TOO_RECENT1
+    KERNEL_IDLE -->|"Ya (≥ 0.8s)"| EBPF_CHECK
 
     POPULATED_AVAIL -->|Tidak| FALLBACK_CHECK
-    FALLBACK_CHECK -->|"Tidak (< 2s)"| TOO_RECENT2
-    FALLBACK_CHECK -->|"Ya (≥ 2s)"| EBPF_CHECK
+    FALLBACK_CHECK -->|"Tidak (< 0.8s)"| TOO_RECENT2
+    FALLBACK_CHECK -->|"Ya (≥ 0.8s)"| EBPF_CHECK
 
     EBPF_CHECK -->|Ya| DEFER
     EBPF_CHECK -->|Tidak| FIND_PATH
@@ -84,10 +84,11 @@ flowchart TD
 
 ## Mengapa Ini Inovasi S2?
 
-1. **Event-Driven vs Polling:** Idle detection menggunakan sinyal kernel (`cgroup.events populated=0`) — bukan polling CPU%. Ini menghilangkan false-idle dan false-active antar interval sampling.
+1. **Event-Driven vs Polling:** Idle detection menggunakan sinyal kernel (`cgroup.events populated=0`) — bukan polling CPU%. Ini menghilangkan false-idle dan false-active antar interval sampling. Waktu tunggu ditekan menjadi 0.8s untuk memaksimalkan capture state idle.
 2. **Literal 0% CPU:** Tidak ada teknik cgroups throttling yang bisa mencapai 0% CPU. Hanya `cgroup.freeze` yang bisa — dan ini eksklusif cgroups v2.
-3. **Safety Gate (eBPF):** Sebelum freeze, mengecek apakah ada transaksi database yang belum selesai. Mencegah data corruption.
-4. **Hard Duration Cap:** Freeze dibatasi 500–1000ms per siklus. Dikombinasikan dengan TCP Backlog buffering (lihat flowchart berikutnya).
+3. **Active Memory Reclaim:** Tidak hanya menghemat CPU, pembekuan otomatis memicu `memory.reclaim` (kernel ≥ 6.1) untuk menekan footprint RAM container yang sedang idle tanpa membunuhnya.
+4. **Safety Gate (eBPF):** Sebelum freeze, mengecek apakah ada transaksi database yang belum selesai. Mencegah data corruption.
+5. **Hard Duration Cap:** Freeze dibatasi 500–1000ms per siklus. Dikombinasikan dengan TCP Backlog buffering (lihat flowchart berikutnya). Durasi freeze ini diakumulasikan dan dilacak per container untuk perhitungan energi.
 
 ---
 
@@ -122,7 +123,7 @@ flowchart TD
         AKTIF{"Apakah populated == 1?<br/>(Container Aktif)"}
         SELESAI_BELUM_IDLE(["END: Container Aktif → Abort"])
 
-        CUKUP_LAMA{"Apakah Idle Terjadi<br/>≥ 2000ms?"}
+        CUKUP_LAMA{"Apakah Idle Terjadi<br/>≥ 800ms?"}
         SELESAI_BARU_SAJA(["END: False-Idle Risk → Abort"])
 
         FALLBACK{"Apakah Polling Idle<br/>≥ Threshold?"}
@@ -137,7 +138,8 @@ flowchart TD
     subgraph BEKUKAN["Fase Eksekusi State"]
         SIMULASI{"Apakah DRY_RUN<br/>Mode Aktif?"}
         CATAT_SAJA["Log Eksekusi Saja"]
-        TULIS_BEKU["❄️ Inisiasi Freeze (Commit 1 ke cgroup.freeze)"]
+        TULIS_BEKU["❄️ Inisiasi Freeze (cgroup.freeze=1)"]
+        RECLAIM["Trigger memory.reclaim<br/>(Bebaskan Page Cache)"]
         TANDAI["Update Tracking State = FROZEN"]
         SELESAI(["END: Siklus Freeze Selesai"])
     end
@@ -174,6 +176,7 @@ flowchart TD
     SIMULASI -->|Ya| CATAT_SAJA
     SIMULASI -->|Tidak| TULIS_BEKU
     CATAT_SAJA --> TANDAI
-    TULIS_BEKU --> TANDAI
+    TULIS_BEKU --> RECLAIM
+    RECLAIM --> TANDAI
     TANDAI --> SELESAI
 ```

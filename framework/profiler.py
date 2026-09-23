@@ -9,7 +9,7 @@ import docker
 
 from .config import (
     EXCLUDED_CONTAINERS, NETWORK_INFRA_PATTERNS, CONNTRACK_MIN,
-    CRITICAL_PORTS_EXCLUDE, CRITICAL_PORTS_PRIORITY
+    CRITICAL_PORTS_EXCLUDE, CRITICAL_PORTS_PRIORITY, STRICT_WHITELIST_MODE
 )
 
 logger = logging.getLogger("hecf.profiler")
@@ -248,6 +248,12 @@ def discover_containers() -> dict:
         logger.info(
             "Whitelist mode: managing %d/%d containers (targets.json has %d entries)",
             len(targets), len(all_discovered), len(targets_whitelist)
+        )
+    elif STRICT_WHITELIST_MODE:
+        targets = {}
+        logger.warning(
+            "STRICT_WHITELIST_MODE is enabled but targets.json is empty. "
+            "HECF will not manage ANY containers until targets.json is populated."
         )
     else:
         # Open mode: manage all discovered non-excluded containers

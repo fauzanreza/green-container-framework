@@ -26,6 +26,9 @@ def get_cgroup_path(container_id: str) -> str:
     ]
     for p in paths:
         if os.path.exists(p):
+            if "docker" not in p:
+                logger.error("Security violation: attempt to shape non-docker cgroup %s", p)
+                return None
             return p
     return None
 
@@ -203,3 +206,35 @@ def _get_zram_size() -> int:
     except (OSError, ValueError):
         pass
     return 0
+
+
+def reclaim_memory(container_id: str, container_name: str) -> bool:
+    """
+    C7: Proactive memory reclaim via cgroups v2 memory.reclaim (kernel ≥ 6.1).
+
+    Triggers the kernel to reclaim reclaimable page cache from a container,
+    reducing its RAM footprint while it is idle/frozen. This frees physical
+    memory for active containers without evicting anonymous pages.
+
+    Returns True if reclaim was triggered, False if not available.
+    Gracefully degrades on kernel < 6.1 where memory.reclaim doesn't exist.
+    """
+    cgroup_path = get_cgroup_path(container_id)
+    if not cgroup_path:
+        return False
+
+    reclaim_path = os.path.join(cgroup_path, "memory.reclaim")
+    if not os.path.exists(reclaim_path):
+        # kernel < 6.1 — memory.reclaim not available
+        return False
+
+    try:
+        # Write number of bytes to reclaim; "0" means reclaim as much as possible
+        # The kernel will reclaim reclaimable pages (file-backed, clean pages)
+        with open(reclaim_path, "w") as f:
+            f.write("0")
+        logger.debug("Memory reclaim triggered for %s", container_name)
+        return True
+    except OSError as e:
+        logger.debug("memory.reclaim failed for %s: %s", container_name, e)
+        return False

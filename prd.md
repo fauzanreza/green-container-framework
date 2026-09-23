@@ -77,8 +77,8 @@ Full technical spec: `architecture.md` §3.
   - Auto-detects host CPU/RAM capacity at init via `/proc/cpuinfo`, `/proc/meminfo`.
   - Attempts to detect hardware power sensors (Intel RAPL / AMD energy counters) for
     real-time electrical measurement (see §4.2).
-  - Cold-Start Fallback: forces **Tier 2 (Balanced)** until 30 samples collected
-    (revised from 120 — at 30s polling, 120 samples = 60 min > 30-min run duration).
+  - Cold-Start Fallback: forces **Tier 2 (Balanced)** until 10 samples collected
+    (revised from 30 — at 30s polling, 10 samples = 5 min, ensuring fast warmup).
   - Container tagging: classifies containers as `priority` (never hard-capped) or
     `non-priority` (safe to throttle first). Managed dynamically via a `priority_map.json`
     Shared State controlled by the Dashboard UI, allowing on-the-fly updates without
@@ -112,15 +112,14 @@ Full technical spec: `architecture.md` §3.
 
 - **Layer 3: Hybrid Control Engine**
   - **3A. Guardrail:** emergency throttle if CPU > 80% OR RAM > 90% in ≥3 of last 5
-    samples.
-  - **3B. Tier Detection:** sliding window of 120 samples; `spike_ratio = P95/P50`.
+    samples. Includes a **Derivative Pre-emptive Trigger** (`d(EMA)/dt > 15%`) to throttle before thresholds are hit.
+  - **3B. Tier Detection:** Dual-Window architecture (10 short, 60 long); `spike_ratio = P95/P50`. Fast-path escalation directly to Tier 1 on sudden bursts.
     - Tier 1 (Aggressive): ratio > 2.0
     - Tier 2 (Balanced): 1.5 ≤ ratio ≤ 2.0
     - Tier 3 (Soft): ratio < 1.5
-  - **3C. Prediction:** fixed-alpha (0.2) EMA, O(1) memory. Fine-tunes Guardrail
-    threshold sensitivity ahead of time — **not** applied directly as a shaping input.
-  - **Tier Hysteresis:** tier change commits only after the new tier is stable for 3
-    consecutive evaluations, preventing rapid oscillation noise in Metrics #1/#5.
+  - **3C. Prediction:** Adaptive Alpha EMA based on variance (0.05 to 0.8), O(1) memory. Fine-tunes Guardrail
+    threshold sensitivity ahead of time and provides the derivative signal.
+  - **Asymmetric Hysteresis:** tier escalation takes only 1 sample (fast response), while de-escalation requires 5 stable samples, preventing rapid oscillation noise in Metrics #1/#5.
   - **PSI Internal Signal:** `cpu.pressure` `some avg10` supplements the Guardrail's
     CPU/RAM thresholds as an internal control signal (not a new tracked metric).
 
@@ -129,8 +128,8 @@ Full technical spec: `architecture.md` §3.
     `memory.max`, `memory.swap.max`) without container restarts.
   - Priority-aware: throttles `non-priority` containers first/harder under Tier 1.
   - **Micro-Freezing:** when a non-priority container is idle (no inbound requests)
-    for ≥2 seconds, Layer 4 writes `cgroup.freeze = 1` to drop CPU usage to exactly
-    **0%** while keeping the container resident in RAM. On the next request, the
+    for ≥0.8 seconds, Layer 4 writes `cgroup.freeze = 1` to drop CPU usage to exactly
+    **0%** while keeping the container resident in RAM, and triggers `memory.reclaim` (kernel ≥ 6.1) to free page cache. On the next request, the
     container thaws in **<1ms**. Hard cap: 500–1000ms per freeze cycle.
   - **zram-as-swap + `memory.swap.max`:** verifies zram-backed swap at cold start;
     sets `memory.swap.max` to allow compressed swap (or 0 if no zram) to prevent

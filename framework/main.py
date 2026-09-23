@@ -23,7 +23,7 @@ from .monitor       import Monitor, get_adaptive_interval
 from .guardrail     import Guardrail
 from .tier_detector import TierDetector
 from .predictor     import EMAPredictor
-from .shaper        import shape_container
+from .shaper        import shape_container, reclaim_memory
 from .energy        import estimate_all
 from .overhead_tracker import OverheadTracker
 from .modes         import OperationMode
@@ -61,7 +61,7 @@ CSV_HEADER = [
     "time", "container_name", "cpu_percent", "mem_percent",
     "tier", "action", "power_watt", "energy_kwh",
     "ema_pred", "alpha", "spike_ratio", "p50", "p95",
-    "overhead_cpu", "overhead_mem"
+    "overhead_cpu", "overhead_mem", "freeze_seconds"
 ]
 
 
@@ -336,6 +336,7 @@ def main():
             
             ema_pred = predictor.update(name, cpu)
             alpha = predictor.get_alpha(name)
+            ema_derivative = predictor.get_derivative(name)
 
             # === Security Layer 3: EDoS check (if enabled) ===
             edos_action = "normal"
@@ -346,9 +347,10 @@ def main():
             # Layer 3A — pass EMA prediction for pre-warning (full_hecf only)
             # Also pass cgroup_path for PSI internal signal (Gap #10)
             ema_for_guardrail = ema_pred if OperationMode.is_predictor_enabled(MODE) else None
+            ema_deriv_for_guardrail = ema_derivative if OperationMode.is_predictor_enabled(MODE) else None
             cgroup_path = monitor._get_cgroup_path(cid)
             guardrail_active = guardrail.update(
-                name, cpu, mem, ema_pred=ema_for_guardrail, cgroup_path=cgroup_path
+                name, cpu, mem, ema_pred=ema_for_guardrail, ema_derivative=ema_deriv_for_guardrail, cgroup_path=cgroup_path
             )
 
             # Mode Selection Logic
@@ -401,6 +403,8 @@ def main():
                     quota = CPU_QUOTA_SOFT
 
             # === Security Layer 4: Micro-Freezing (if enabled) ===
+            is_currently_frozen = False
+            cumulative_freeze_s = 0.0
             if "micro_freezer" in security and action not in ("EDOS_FREEZE",):
                 mf = security["micro_freezer"]
                 # Record activity for containers that are active
@@ -412,8 +416,13 @@ def main():
                     action = "MICRO_FREEZE"
                     # Don't apply quota shaping — container is frozen at 0% CPU
                     quota = -1
+                    # C7: Active Memory Reclaim
+                    reclaim_memory(cid, name)
                 elif freeze_result["action"] == "thaw":
                     logger.info("[THAW] %s thawed — resuming normal shaping", name)
+                
+                is_currently_frozen = mf.is_frozen(cid)
+                cumulative_freeze_s = mf.get_cumulative_freeze_seconds(cid)
 
             # Layer 4: Shaper — now with memory shaping
             if action not in ("MICRO_FREEZE", "EDOS_FREEZE"):
@@ -423,10 +432,11 @@ def main():
                     host_mem_bytes=host_mem_bytes,
                 )
 
-            # Energy Estimator
+            # Energy Estimator (S3: frozen containers consume 0W)
             energy_data = estimate_all(
                 cpu, current_interval, p_idle, p_max,
-                hw_power=total_hw_power, cpu_count=cpu_count
+                hw_power=total_hw_power, cpu_count=cpu_count,
+                is_frozen=is_currently_frozen
             )
 
             # Logging
@@ -453,7 +463,8 @@ def main():
                 f"{tier_stats['p50']:.1f}",
                 f"{tier_stats['p95']:.1f}",
                 f"{overhead['cpu_percent']:.2f}",
-                f"{overhead['mem_usage_mb']:.2f}"
+                f"{overhead['mem_usage_mb']:.2f}",
+                f"{cumulative_freeze_s:.3f}"
             ])
 
             if guardrail_active and OperationMode.is_guardrail_enabled(MODE):

@@ -49,9 +49,10 @@ class MicroFreezer:
         self._ebpf_sensor = ebpf_sensor
         self._dry_run = dry_run
 
-        # container_id -> {"frozen": bool, "frozen_at": float, "last_activity": float,
-        #                  "populated": bool}
+        # container_id -> {"frozen": bool, "frozen_at": float, "last_activity": float}
         self._state = {}
+        # S5: Cumulative freeze duration tracking (container_id -> total seconds frozen)
+        self._cumulative_freeze_seconds = {}
 
         logger.info(
             "Micro-Freezer initialized (idle_trigger=%.1fs, max_freeze=%dms, "
@@ -167,6 +168,13 @@ class MicroFreezer:
 
     def _thaw(self, container_id: str, reason: str = ""):
         """Write 0 to cgroup.freeze to resume container (sub-1ms)."""
+        # S5: Accumulate freeze duration before resetting state
+        state = self._state.get(container_id, {})
+        if state.get("frozen") and state.get("frozen_at", 0) > 0:
+            freeze_duration = time.time() - state["frozen_at"]
+            prev_total = self._cumulative_freeze_seconds.get(container_id, 0.0)
+            self._cumulative_freeze_seconds[container_id] = prev_total + freeze_duration
+
         # Always update internal state first — even if the file doesn't exist
         # (e.g. dry_run mode, dev machine, or container already removed)
         self._state[container_id]["frozen"] = False
@@ -196,6 +204,9 @@ class MicroFreezer:
         ]
         for p in paths:
             if os.path.exists(p):
+                if "docker" not in p:
+                    logger.error("Security violation: attempt to freeze non-docker cgroup %s", p)
+                    return None
                 return p
         return None
 
@@ -203,6 +214,15 @@ class MicroFreezer:
         """Check if a container is currently frozen."""
         state = self._state.get(container_id)
         return state is not None and state.get("frozen", False)
+
+    def get_cumulative_freeze_seconds(self, container_id: str) -> float:
+        """S5: Return total seconds this container has spent frozen (cumulative)."""
+        total = self._cumulative_freeze_seconds.get(container_id, 0.0)
+        # Add current freeze duration if still frozen
+        state = self._state.get(container_id)
+        if state and state.get("frozen") and state.get("frozen_at", 0) > 0:
+            total += time.time() - state["frozen_at"]
+        return round(total, 3)
 
     def thaw_all(self):
         """Emergency thaw: unfreeze all containers."""
@@ -217,6 +237,7 @@ class MicroFreezer:
             if self._state[cid]["frozen"]:
                 self._thaw(cid, reason="container_disappeared")
             del self._state[cid]
+            self._cumulative_freeze_seconds.pop(cid, None)
 
     def _check_populated(self, container_id: str):
         """
@@ -245,5 +266,8 @@ class MicroFreezer:
         ]
         for p in paths:
             if os.path.exists(p):
+                if "docker" not in p:
+                    logger.error("Security violation: attempt to read events of non-docker cgroup %s", p)
+                    return None
                 return p
         return None

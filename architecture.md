@@ -143,14 +143,18 @@ The centralized decision layer combining reactive, analytic, and proactive contr
     in **at least 3 of the last 5** samples.
   - The 3-of-5 rule avoids false positives on harmless micro-spikes while still
     reacting before OOM.
+  - **Derivative Pre-emptive Trigger:** If the EMA prediction trend is rising fast
+    (`d(EMA)/dt > 15%` per sample) AND `EMA > 60%`, Guardrail triggers *before* CPU
+    hits the 80% threshold. (Proactive Throttling Pipeline)
   - **PSI Internal Signal:** Layer 3A reads `<cgroup>/cpu.pressure` (`some avg10`)
     as a supplementary internal signal alongside CPU/RAM thresholds. If PSI
     `some avg10 > 25.0` AND the 3-of-5 condition is met, Guardrail confidence is
     elevated (logged as `GUARDRAIL+PSI`). PSI is NOT a new tracked metric.
 
 - **3B. Tier Detector (`framework/tier_detector.py`)** — *analytic*
-  - Sliding window of the last **120** samples.
+  - **Dual-Window Architecture:** Uses a **Short Window** (10 samples) for rapid burst detection and a **Long Window** (60 samples) for baseline trending.
   - Computes `spike_ratio = P95 / P50` of CPU utilization via `numpy.percentile()`.
+  - **Fast-Path Escalation:** If the Short Window spike ratio exceeds 2.0, the system escalates directly to Tier 1 without delay.
 
   | Tier | Label | Condition |
   | --- | --- | --- |
@@ -158,17 +162,16 @@ The centralized decision layer combining reactive, analytic, and proactive contr
   | 2 | Balanced | `1.5 ≤ spike_ratio ≤ 2.0` |
   | 3 | Soft | `spike_ratio < 1.5` |
 
-  - **Tier Transition Hysteresis:** a tier change commits only after the new tier
-    has been stable for `TIER_HYSTERESIS_SAMPLES` (default: 3) consecutive evaluations.
-    Prevents rapid oscillation (e.g. Tier 2→1→2→1) that introduces noise into
-    Metrics #1 and #5. Configurable via `HECF_TIER_HYSTERESIS` env var.
+  - **Asymmetric Hysteresis:** A tier transition commits based on the direction of change:
+    - *Escalation (Soft → Aggressive):* 1 sample (fast response to threats)
+    - *De-escalation (Aggressive → Soft):* 5 consecutive samples (prevents premature release)
 
 - **3C. Predictor (`framework/predictor.py`)** — *proactive*
-  - **EMA (Exponential Moving Average)**, fixed `alpha = 0.2` (filters high-frequency
-    network noise while remaining responsive to trend changes).
-  - O(1) time and memory — needs only the previous smoothed value.
-  - The predicted trend fine-tunes the Guardrail's threshold sensitivity ahead of
-    time; it is **not** applied directly as a cgroup shaping parameter.
+  - **Adaptive Alpha EMA (Exponential Moving Average):** Dynamically adjusts alpha based on recent CPU variance.
+    - High variance (spike) → `alpha = 0.8` (fast tracking)
+    - Low variance (stable) → `alpha = 0.05` (noise suppression)
+  - O(1) time and memory per update. Maintains a small 10-sample buffer for variance.
+  - Provides the `d(EMA)/dt` derivative signal to the Guardrail for pre-emptive throttling.
 
 #### Layer 4: Adaptive Resource Shaping (`framework/shaper.py`)
 
@@ -187,9 +190,10 @@ and more aggressively; priority containers are shielded from hard caps.
 **Micro-Freezing (`framework/security/micro_freezer.py`):**
 Extends Layer 4 shaping with a sub-second, zero-CPU idle mechanism:
 
-- When a `non-priority` container has had no inbound activity for **≥2 seconds**,
+- When a `non-priority` container has had no inbound activity for **≥0.8 seconds**,
   Layer 4 writes `1` to `cgroup.freeze`, dropping CPU usage to exactly **0%** while
   keeping the container fully resident in memory (no cold-start penalty).
+- **Active Memory Reclaim:** Upon freezing, HECF triggers `memory.reclaim` (kernel ≥ 6.1) to proactively free page cache, reducing the frozen container's RAM footprint.
 - On the next inbound request, `cgroup.freeze = 0` is written, thawing the container
   in **under 1ms**.
 - Hard freeze-duration cap: **500–1000ms** maximum per cycle (see §5 for why this

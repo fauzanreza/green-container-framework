@@ -4,23 +4,26 @@
 > **Posisi di Diagram:** Layer 3 — Hybrid Control Engine → 3B Tier Detector (P95/P50)
 > **Kategori:** 🌟 INOVASI ALGORITMA (S2)
 
-Algoritma **Statistical Volatility Classification** menggunakan rasio persentil P95/P50 dalam sliding window 120 sampel. Ditambah mekanisme **Hysteresis** untuk mencegah osilasi antar tier.
+Algoritma **Dual-Window Volatility Classification** menggunakan rasio persentil P95/P50 dalam Short Window (10 sampel) untuk deteksi burst cepat, dan Long Window (60 sampel) untuk tren baseline. Ditambah mekanisme **Asymmetric Hysteresis** (naik cepat, turun lambat) untuk mencegah osilasi tier.
 
 ```mermaid
 flowchart TD
     START(["TierDetector (per container)"])
 
-    ADD["add_sample(cpu)<br/>Append ke sliding window"]
-    TRIM{"len(window)<br/>> 120?"}
-    POP["window.pop(0)"]
+    ADD["add_sample(cpu)<br/>Append ke short_window & long_window"]
+    TRIM{"len(long)<br/>> 60?"}
+    POP["long.pop(0)<br/>short.pop(0)"]
 
     GET_TIER(["get_tier(container_name)"])
 
-    COLD{"len(window)<br/>< 30?"}
-    COLD_FALLBACK["Return Tier 2<br/>(Insufficient data)"]
+    COLD{"len(long)<br/>< 10?"}
+    COLD_FALLBACK["Return Tier 2<br/>(Warmup)"]
+    
+    FAST_PATH{"Short Window<br/>len ≥ 5 & spike_ratio > 2.0?"}
+    FAST_ESCALATE["Bypass Hysteresis:<br/>Escalate Immediate (Tier 1)"]
 
-    CALC_P50["p50 = numpy.percentile(window, 50)<br/><i>Median</i>"]
-    CALC_P95["p95 = numpy.percentile(window, 95)<br/><i>Spike</i>"]
+    CALC_P50["p50 = numpy.percentile(long, 50)<br/><i>Median</i>"]
+    CALC_P95["p95 = numpy.percentile(long, 95)<br/><i>Spike</i>"]
 
     P50_ZERO{"p50 ≤ 0?<br/>(idle)"}
     IDLE_SOFT["Return Tier 3 (Soft)"]
@@ -42,7 +45,11 @@ flowchart TD
 
     SAME_PENDING{"raw_tier ==<br/>state.pending?"}
     INC_COUNT["state.count += 1"]
-    COUNT_MET{"count ≥ 3?"}
+    
+    DIRECTION{"Tentukan Arah Transisi:<br/>Escalation atau De-escalation"}
+    THRESH_EVAL["threshold = 1 (Escalate)<br/>threshold = 5 (De-escalate)"]
+    
+    COUNT_MET{"count ≥ threshold?"}
     COMMIT["✅ Commit transisi tier:<br/>state.current = raw_tier<br/>count = 0"]
     RETURN_NEW(["Return raw_tier (baru)"])
     HOLD(["Return state.current<br/>(Hold)"])
@@ -57,8 +64,11 @@ flowchart TD
     POP --> GET_TIER
 
     GET_TIER --> COLD
-    COLD -->|"Ya (< 30)"| COLD_FALLBACK
-    COLD -->|"Tidak (≥ 30)"| CALC_P50
+    COLD -->|"Ya (< 10)"| COLD_FALLBACK
+    COLD -->|"Tidak (≥ 10)"| FAST_PATH
+    
+    FAST_PATH -->|Ya| FAST_ESCALATE
+    FAST_PATH -->|Tidak| CALC_P50
 
     CALC_P50 --> CALC_P95
     CALC_P95 --> P50_ZERO
@@ -83,8 +93,10 @@ flowchart TD
 
     SAME_CURRENT -->|Tidak| SAME_PENDING
     SAME_PENDING -->|Ya| INC_COUNT
-    INC_COUNT --> COUNT_MET
-    COUNT_MET -->|"Ya (≥ 3)"| COMMIT
+    INC_COUNT --> DIRECTION
+    DIRECTION --> THRESH_EVAL
+    THRESH_EVAL --> COUNT_MET
+    COUNT_MET -->|"Ya (≥ threshold)"| COMMIT
     COMMIT --> RETURN_NEW
     COUNT_MET -->|Tidak| HOLD
 
@@ -94,9 +106,9 @@ flowchart TD
 
 ## Mengapa Ini Inovasi S2?
 
-1. **P95/P50 Spike Ratio:** Bukan menggunakan rata-rata (mean) yang sensitif terhadap outlier. Rasio persentil ini adalah metode statistik robust untuk mendeteksi *burstiness* beban kerja web secara real-time.
-2. **Sliding Window 120 Sampel:** Memberikan konteks historis yang cukup panjang tanpa mengonsumsi memori berlebih.
-3. **Hysteresis (3 sampel stabil):** Algoritma anti-osilasi dari teori kontrol — tier baru hanya di-commit jika konsisten selama 3 evaluasi berturut-turut. Mencegah *flapping* yang menyebabkan overhead percuma.
+1. **Dual-Window Architecture:** Short window (10) mendeteksi burst langsung, Long window (60) menilai tren baseline. Fast-path escalation memotong antrean.
+2. **P95/P50 Spike Ratio:** Bukan menggunakan rata-rata (mean) yang sensitif terhadap outlier. Rasio persentil ini adalah metode statistik robust untuk mendeteksi *burstiness* beban kerja web secara real-time.
+3. **Asymmetric Hysteresis:** Algoritma anti-osilasi asimetris — eskalasi (ancaman naik) cepat hanya 1 sampel, de-eskalasi (beban turun) butuh konfirmasi lambat 5 sampel berturut-turut. Mencegah *flapping* dan pelepasan prematur.
 
 ---
 

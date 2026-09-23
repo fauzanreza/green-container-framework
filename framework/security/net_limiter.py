@@ -115,7 +115,11 @@ class NetLimiter:
                     if container_id[:12] in line or "veth" in line:
                         parts = line.split(":")
                         if len(parts) >= 2:
-                            return parts[1].strip().split("@")[0]
+                            ifname = parts[1].strip().split("@")[0]
+                            if ifname.startswith("veth"):
+                                return ifname
+                            else:
+                                logger.warning("net_limiter: skipping non-veth interface %s (prevent host isolation)", ifname)
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired,
                     OSError):
                 pass

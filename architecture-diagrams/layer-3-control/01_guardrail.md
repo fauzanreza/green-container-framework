@@ -8,7 +8,7 @@ Algoritma **Reactive Debouncing** menggunakan Rolling Boolean Array. Mengevaluas
 
 ```mermaid
 flowchart TD
-    START(["Guardrail.update(container_name, cpu, mem, ema_pred, cgroup_path)"])
+    START(["Guardrail.update(container_name, cpu, mem, ema_pred, ema_derivative, cgroup_path)"])
 
     EMA_CHECK{"ema_pred<br/>tersedia?"}
     
@@ -16,6 +16,8 @@ flowchart TD
     LOWER_THRESH["cpu_thresh = 75%<br/>(EMA-adjusted)"]
     NORMAL_THRESH["cpu_thresh = 80%<br/>(default)"]
 
+    DERIV_CHECK{"ema_derivative > 15%<br/>& ema_pred > 60%?"}
+    DERIV_TRUE["is_over = True<br/>(Proactive Derivative)"]
     EVAL_OVER["Evaluasi overload:<br/>is_over = cpu > thresh OR mem > 90%"]
 
     APPEND["Append is_over ke rolling history<br/>(boolean array, max 5)"]
@@ -43,9 +45,13 @@ flowchart TD
     EMA_ZONE -->|Ya| LOWER_THRESH
     EMA_ZONE -->|Tidak| NORMAL_THRESH
 
-    LOWER_THRESH --> EVAL_OVER
-    NORMAL_THRESH --> EVAL_OVER
+    LOWER_THRESH --> DERIV_CHECK
+    NORMAL_THRESH --> DERIV_CHECK
 
+    DERIV_CHECK -->|Ya| DERIV_TRUE
+    DERIV_CHECK -->|Tidak| EVAL_OVER
+    
+    DERIV_TRUE --> APPEND
     EVAL_OVER --> APPEND
     APPEND --> TRIM
     TRIM -->|Ya| POP
@@ -69,8 +75,9 @@ flowchart TD
 ## Mengapa Ini Inovasi S2?
 
 1. **Rolling Boolean Array (3-of-5):** Bukan sekadar `if cpu > 80%`. Algoritma ini mengevaluasi pola temporal — hanya memicu intervensi jika anomali **persisten**, bukan sesaat.
-2. **EMA-Adjusted Threshold:** Threshold bergeser secara proaktif berdasarkan prediksi EMA dari Layer 3C. Ini adalah integrasi antar-algoritma (prediktif → reaktif).
-3. **PSI Confirmation Signal:** Menggunakan sinyal *Pressure Stall Information* dari kernel Linux sebagai variabel konfirmasi tambahan, meningkatkan akurasi keputusan.
+2. **Derivative Pre-emptive Trigger:** Memantau `d(EMA)/dt`. Jika tren naik tajam (>15% per sampel) dan baseline sudah tinggi (>60%), Guardrail memicu pemotongan *sebelum* threshold keras tertembus.
+3. **EMA-Adjusted Threshold:** Threshold bergeser secara proaktif berdasarkan prediksi EMA dari Layer 3C. Ini adalah integrasi antar-algoritma (prediktif → reaktif).
+4. **PSI Confirmation Signal:** Menggunakan sinyal *Pressure Stall Information* dari kernel Linux sebagai variabel konfirmasi tambahan, meningkatkan akurasi keputusan.
 
 ---
 
@@ -84,6 +91,9 @@ flowchart TD
     MENDEKATI{"Apakah Prediksi EMA<br/>Mendekati Threshold?"}
     BATAS_RENDAH["Turunkan threshold<br/>(lebih sensitif)"]
     BATAS_NORMAL["Threshold standar"]
+
+    CEK_DERIVATIF{"Apakah Tren EMA<br/>Naik Sangat Cepat?"}
+    DERIVATIF_AKTIF["Overload Dini<br/>(Proaktif)"]
 
     CEK["Evaluasi utilisasi:<br/>CPU atau Memori > threshold?"]
 
@@ -112,8 +122,13 @@ flowchart TD
     MENDEKATI -->|Ya| BATAS_RENDAH
     MENDEKATI -->|Tidak| BATAS_NORMAL
 
-    BATAS_RENDAH --> CEK
-    BATAS_NORMAL --> CEK
+    BATAS_RENDAH --> CEK_DERIVATIF
+    BATAS_NORMAL --> CEK_DERIVATIF
+    
+    CEK_DERIVATIF -->|Ya| DERIVATIF_AKTIF
+    CEK_DERIVATIF -->|Tidak| CEK
+    
+    DERIVATIF_AKTIF --> CATAT
     CEK --> CATAT
     CATAT --> PENUH
     PENUH -->|Ya| BUANG

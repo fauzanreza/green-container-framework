@@ -4,10 +4,21 @@
 # Formula: P(t) = P_idle + (P_max - P_idle) × CPU_utilization(t)
 # Carbon conversion explicitly removed as per Batasan Penelitian (PRD §1.6)
 
-def estimate_power(cpu_percent: float, p_idle: float, p_max: float, hw_power: float = None, cpu_count: int = 1) -> float:
+def estimate_power(cpu_percent: float, p_idle: float, p_max: float,
+                    hw_power: float = None, cpu_count: int = 1,
+                    is_frozen: bool = False) -> float:
     """
     Estimate power in Watts using either Hardware Apportionment or Linear Software Model.
+
+    Args:
+        is_frozen: If True, container is in Micro-Freeze state (cgroup.freeze=1).
+                   Frozen containers consume exactly 0% CPU — their power
+                   contribution is 0W (not P_idle, which is host baseline).
     """
+    # Micro-Frozen container = 0% CPU = 0W power contribution for THIS container
+    if is_frozen:
+        return 0.0
+
     if hw_power is not None and hw_power > 0:
         # Hardware-True: Proportional Power Apportionment
         # Container Power = Total HW Power * (Container CPU / Total CPU Capacity)
@@ -26,9 +37,11 @@ def estimate_energy(power_watt: float, duration_seconds: float) -> float:
     return round((power_watt * duration_seconds) / 3_600_000, 9)
 
 
-def estimate_all(cpu_percent: float, duration_seconds: float, p_idle: float, p_max: float, hw_power: float = None, cpu_count: int = 1) -> dict:
+def estimate_all(cpu_percent: float, duration_seconds: float, p_idle: float, p_max: float,
+                  hw_power: float = None, cpu_count: int = 1,
+                  is_frozen: bool = False) -> dict:
     """Helper: calculates power and energy (no carbon tracking)."""
-    power   = estimate_power(cpu_percent, p_idle, p_max, hw_power, cpu_count)
+    power   = estimate_power(cpu_percent, p_idle, p_max, hw_power, cpu_count, is_frozen)
     energy  = estimate_energy(power, duration_seconds)
     return {
         "power_watt": power,

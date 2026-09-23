@@ -34,9 +34,9 @@ flowchart TD
         STALE{"Stats<br/>stale?"}
         SKIP_STALE["Skip shaping<br/>(container mungkin mati)"]
 
-        L3B["<b>Layer 3B:</b> tier_detector.add_sample(name, cpu)<br/>tier_int = tier_detector.get_tier(name)<br/><i>P95/P50 + Hysteresis</i>"]
-        L3C["<b>Layer 3C:</b> ema_pred = predictor.update(name, cpu)<br/><i>Y(t) = α × cpu + (1-α) × Y(t-1)</i>"]
-        L3A["<b>Layer 3A:</b> guardrail.update(name, cpu, mem, ema_pred)<br/><i>3-of-5 rolling + PSI (Pressure Stall Information) + EMA threshold adjust</i>"]
+        L3B["<b>Layer 3B:</b> tier_detector.add_sample(name, cpu)<br/>tier_int = tier_detector.get_tier(name)<br/><i>Dual-Window P95/P50 + Asymmetric Hysteresis</i>"]
+        L3C["<b>Layer 3C:</b> ema_pred = predictor.update(name, cpu)<br/>ema_derivative = predictor.get_derivative()<br/><i>Y(t) = α(t) × cpu + (1-α(t)) × Y(t-1)</i>"]
+        L3A["<b>Layer 3A:</b> guardrail.update(name, cpu, mem, ema_pred, ema_derivative)<br/><i>3-of-5 rolling + Derivative Pre-emption + PSI + EMA adjust</i>"]
 
         EDOS_CHECK{"[Security] EDoS<br/>action=freeze?"}
         EDOS_FREEZE["action = EDOS_FREEZE<br/>micro_freezer._freeze(name, id)"]
@@ -65,7 +65,7 @@ flowchart TD
 
         ENERGY_EST["<b>Supplementary:</b> estimate_all()<br/>Hitung power (W) dan energy (kWh)"]
 
-        CSV_ROW["Kumpulkan CSV row:<br/>time, name, cpu, mem, tier,<br/>action, power, energy, ema,<br/>alpha, spike_ratio, p50, p95,<br/>overhead_cpu, overhead_mem"]
+        CSV_ROW["Kumpulkan CSV row:<br/>time, name, cpu, mem, tier,<br/>action, power, energy, ema,<br/>alpha, spike_ratio, p50, p95,<br/>overhead_cpu, overhead_mem, freeze_s"]
     end
 
     CSV_WRITE["Atomic CSV write:<br/>Append semua row ke metrics.csv"]
