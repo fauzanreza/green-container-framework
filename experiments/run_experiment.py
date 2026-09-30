@@ -78,11 +78,11 @@ def run_locust(condition: str, workload: str, intensity_name: str, duration: int
     if not is_warmup:
         csv_prefix_arg = ["--csv", container_csv_path]
     
-    # Map workload to host
+    # Map workload to host (semua mengarah ke http-arena / bench-json)
     hosts = {
         "json": "http://bench-json:8000",
-        "static": "http://portfolio-web:80",
-        "db": "http://shopyvibe-app:3000"
+        "static": "http://bench-json:8000",
+        "db": "http://bench-json:8000"
     }
     target_host = hosts.get(workload, "http://bench-json:8000")
 
