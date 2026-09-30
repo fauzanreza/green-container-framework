@@ -6,56 +6,59 @@
 Diagram ini menunjukkan **tumpukan teknologi (technology stack)** yang digunakan HECF — Docker, Linux Kernel, Locust, HttpArena — dan bagaimana mereka terhubung secara infrastruktur. Ini BUKAN algoritma, melainkan *tools* yang menjadi wadah eksekusi algoritma.
 
 ```mermaid
-flowchart TB
-    subgraph INFRA["Infrastruktur & Tools (Kategori: Engineering Support)"]
+flowchart LR
+    subgraph KERNEL_API["Linux Kernel API (Read/Write)"]
         direction TB
-
-        subgraph DOCKER_COMPOSE["docker-compose.yml — Orchestrasi Container"]
-            HECF_SVC["<b>Service: hecf</b><br/>privileged: true<br/>pid: host<br/><i>HECF Engine</i>"]
-            DASH_SVC["<b>Service: hecf-dashboard</b><br/>Gunicorn 1 worker × 2 threads<br/>Port 8092<br/><i>dashboard.py</i>"]
-            BENCH_SVC["<b>Service: bench-json</b><br/>HttpArena<br/>Port 8000<br/><i>http-arena/main.py</i>"]
-        end
-
-        subgraph VOLUMES["Shared Volumes (File-based IPC)"]
-            CSV["metrics.csv<br/><i>HECF → Dashboard</i>"]
-            TARGETS["targets.json<br/><i>Dashboard ↔ HECF</i>"]
-            PRIO["priority_map.json<br/><i>Dashboard ↔ HECF</i>"]
-            DISC["discovered_containers.json<br/><i>HECF → Dashboard</i>"]
-            STATUS["framework_status.json<br/><i>Dashboard → HECF</i>"]
-        end
-
-        subgraph KERNEL_API["Linux Kernel API (Read/Write)"]
-            CGROUP["/sys/fs/cgroup/<br/>cpu.stat, memory.stat,<br/>cpu.max, memory.max,<br/>cgroup.freeze"]
-            PROC["/proc/cpuinfo<br/>/proc/meminfo<br/>/proc/stat<br/>/proc/loadavg"]
-            RAPL["/sys/class/powercap/<br/>intel-rapl energy_uj"]
-            SOCK["/var/run/docker.sock<br/>Docker Daemon API"]
-        end
-
-        subgraph LOAD_GEN["Load Generation Tools"]
-            LOCUST["🔧 Locust<br/><i>locustfiles/locustfile.py</i><br/>4 profil: Low/Med/High/Spike"]
-        end
-
-        HECF_SVC -->|"Write"| CSV
-        HECF_SVC -->|"Read"| TARGETS
-        HECF_SVC -->|"Read"| PRIO
-        HECF_SVC -->|"Write"| DISC
-        HECF_SVC -->|"Read"| STATUS
-
-        DASH_SVC -->|"Read"| CSV
-        DASH_SVC -->|"Read/Write"| TARGETS
-        DASH_SVC -->|"Read/Write"| PRIO
-        DASH_SVC -->|"Read"| DISC
-        DASH_SVC -->|"Write"| STATUS
-
-        HECF_SVC <-->|"docker.from_env()"| SOCK
-        HECF_SVC <-->|"Direct Read/Write"| CGROUP
-        HECF_SVC -->|"Read"| PROC
-        HECF_SVC -->|"Read"| RAPL
-        DASH_SVC -->|"Read (ro)"| PROC
-        DASH_SVC -->|"Read (ro)"| SOCK
-
-        LOCUST -->|"HTTP Requests"| BENCH_SVC
+        SOCK["/var/run/docker.sock<br/>(Docker Daemon API)"]
+        CGROUP["/sys/fs/cgroup/<br/>(cpu.stat, cpu.max, etc)"]
+        PROC["/proc/<br/>(cpuinfo, meminfo, stat)"]
+        RAPL["/sys/class/powercap/<br/>(intel-rapl energy_uj)"]
     end
+
+    subgraph DOCKER_COMPOSE["docker-compose.yml — Orchestrasi Container"]
+        direction TB
+        HECF_SVC["<b>Service: hecf</b><br/><i>HECF Engine</i><br/>(privileged: true)"]
+        DASH_SVC["<b>Service: hecf-dashboard</b><br/><i>dashboard.py</i><br/>(Gunicorn, Port 8092)"]
+        BENCH_SVC["<b>Service: bench-json</b><br/><i>http-arena/main.py</i><br/>(Port 8000)"]
+    end
+
+    subgraph VOLUMES["Shared Volumes (File-based IPC)"]
+        direction TB
+        CSV["metrics.csv"]
+        TARGETS["targets.json"]
+        PRIO["priority_map.json"]
+        DISC["discovered_containers.json"]
+        STATUS["framework_status.json"]
+    end
+
+    subgraph LOAD_GEN["Load Generation Tools"]
+        LOCUST["🔧 Locust<br/><i>locustfile.py</i><br/>4 profil: Low/Med/High/Spike"]
+    end
+
+    %% Hubungan Kernel -> Docker Services
+    SOCK <-->|"docker.from_env()"| HECF_SVC
+    CGROUP <-->|"R/W"| HECF_SVC
+    PROC -->|"R"| HECF_SVC
+    RAPL -->|"R"| HECF_SVC
+
+    SOCK -.->|"R (ro)"| DASH_SVC
+    PROC -.->|"R (ro)"| DASH_SVC
+
+    %% Hubungan Docker Services -> Shared Volumes
+    HECF_SVC -->|"W"| CSV
+    HECF_SVC -->|"R"| TARGETS
+    HECF_SVC -->|"R"| PRIO
+    HECF_SVC -->|"W"| DISC
+    HECF_SVC -->|"R"| STATUS
+
+    DASH_SVC -->|"R"| CSV
+    DASH_SVC <-->|"R/W"| TARGETS
+    DASH_SVC <-->|"R/W"| PRIO
+    DASH_SVC -->|"R"| DISC
+    DASH_SVC -->|"W"| STATUS
+
+    %% Hubungan Load Generator -> Target
+    LOCUST -->|"HTTP Requests"| BENCH_SVC
 ```
 
 ## Pemetaan File → Infrastruktur
@@ -76,48 +79,47 @@ flowchart TB
 ## Alur Logika Konseptual
 
 ```mermaid
-flowchart TB
-    subgraph INFRA["Technology Stack & Infrastructure Tools"]
+flowchart LR
+    subgraph OS["Linux Kernel & Hardware APIs"]
         direction TB
-
-        subgraph APPS["Docker Container Services"]
-            MESIN["<b>HECF Engine</b><br/>Otak utama pengontrol (Privileged)"]
-            LAYAR["<b>HECF Dashboard</b><br/>Web Interface (Gunicorn/Flask)"]
-            BENCHMARK["<b>HttpArena Target</b><br/>Aplikasi beban uji coba"]
-        end
-
-        subgraph FILE["Inter-Process Communication (Shared Volumes)"]
-            LAPORAN["Metrics Report (metrics.csv)"]
-            DAFTAR["Target Configuration (targets.json)"]
-            PRIORITAS["Priority Map (priority_map.json)"]
-        end
-
-        subgraph OS["Linux Kernel & Hardware APIs"]
-            PENGATUR["cgroupfs Interface<br/>(CPU & RAM Quota I/O)"]
-            INFO["sysfs & procfs<br/>(Topologi Hardware)"]
-            LISTRIK["RAPL/Hwmon<br/>(Sensor Daya Silikon)"]
-            DOCKER_API["Docker Daemon<br/>(Container Runtime API)"]
-        end
-
-        subgraph PENGUJI["Load Generation"]
-            LOCUST["Locust Test Suite<br/>(Simulasi HTTP Traffic)"]
-        end
-
-        MESIN -->|"Write"| LAPORAN
-        MESIN -->|"Read"| DAFTAR
-        MESIN -->|"Read"| PRIORITAS
-
-        LAYAR -->|"Read"| LAPORAN
-        LAYAR -->|"Read/Write"| DAFTAR
-        LAYAR -->|"Read/Write"| PRIORITAS
-
-        MESIN <-->|"Query Container List"| DOCKER_API
-        MESIN <-->|"Read/Write Quota"| PENGATUR
-        MESIN -->|"Read Host Profile"| INFO
-        MESIN -->|"Read Power Metrics"| LISTRIK
-
-        LOCUST -->|"Inject HTTP Requests"| BENCHMARK
+        DOCKER_API["Docker Daemon<br/>(Container Runtime API)"]
+        PENGATUR["cgroupfs Interface<br/>(CPU & RAM Quota I/O)"]
+        INFO["sysfs & procfs<br/>(Topologi Hardware)"]
+        LISTRIK["RAPL/Hwmon<br/>(Sensor Daya Silikon)"]
     end
+
+    subgraph APPS["Docker Container Services"]
+        direction TB
+        MESIN["<b>HECF Engine</b><br/>Otak utama pengontrol"]
+        LAYAR["<b>HECF Dashboard</b><br/>Web Interface"]
+        BENCHMARK["<b>HttpArena Target</b><br/>Aplikasi beban uji coba"]
+    end
+
+    subgraph FILE["Inter-Process Communication (Shared Volumes)"]
+        direction TB
+        LAPORAN["Metrics Report<br/>(metrics.csv)"]
+        DAFTAR["Target Configuration<br/>(targets.json)"]
+        PRIORITAS["Priority Map<br/>(priority_map.json)"]
+    end
+
+    subgraph PENGUJI["Load Generation"]
+        LOCUST["Locust Test Suite<br/>(Simulasi HTTP Traffic)"]
+    end
+
+    DOCKER_API <-->|"Query"| MESIN
+    PENGATUR <-->|"R/W Quota"| MESIN
+    INFO -->|"Read Profile"| MESIN
+    LISTRIK -->|"Read Power"| MESIN
+
+    MESIN -->|"W"| LAPORAN
+    MESIN -->|"R"| DAFTAR
+    MESIN -->|"R"| PRIORITAS
+
+    LAYAR -->|"R"| LAPORAN
+    LAYAR <-->|"R/W"| DAFTAR
+    LAYAR <-->|"R/W"| PRIORITAS
+
+    LOCUST -->|"Inject HTTP Requests"| BENCHMARK
 ```
 
 ---
