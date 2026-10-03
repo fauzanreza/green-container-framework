@@ -15,7 +15,9 @@ services:
       - ./targets.json:/app/targets.json          # Managed container whitelist (UI-editable)
       - ./discovered_containers.json:/app/discovered_containers.json  # Written by engine, read by dashboard
     environment:
-      - HECF_MODE=full_hecf
+      - HECF_MODE=${HECF_MODE:-full_hecf}
+      - GUARDRAIL_CPU_THRESHOLD=${GUARDRAIL_CPU_THRESHOLD:-80}
+      - GUARDRAIL_RAM_THRESHOLD=${GUARDRAIL_RAM_THRESHOLD:-90}
     restart: unless-stopped
     deploy:
       resources:

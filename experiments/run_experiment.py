@@ -38,7 +38,7 @@ TOTAL_DURATION_SEC = WARMUP_SEC + EVALUATION_SEC
 COOLDOWN_SEC = 0 # No cooldown to keep exactly 20 mins per run
 
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # green-container-framework/
-COMPOSE_DIR = os.path.join(os.path.dirname(PROJECT_DIR), "portfolio-app")  # ../portfolio-app/ (main docker-compose.yml)
+COMPOSE_DIR = PROJECT_DIR  # Changed to PROJECT_DIR to use the local docker-compose.yml
 RESULTS_DIR = os.path.join(PROJECT_DIR, "experiment_results")
 SESSION_TIMESTAMP = time.strftime("%Y%m%d_%H%M%S")
 LOCUST_FILE = os.path.join(PROJECT_DIR, "locustfiles", "locustfile.py")
