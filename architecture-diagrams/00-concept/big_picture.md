@@ -17,7 +17,7 @@ flowchart TB
 
             L2["<b>Layer 2: Monitoring Engine</b><br/><i>monitor.py</i><br/>───────────────<br/>• cgroupfs v2 Direct Read<br/>• Adaptive Sampling<br/>• Event-Driven Idle Detection"]
 
-            L3["<b>Layer 3: Hybrid Control Engine</b><br/><i>guardrail.py, tier_detector.py, predictor.py</i><br/>───────────────<br/>• 3A: Guardrail (3-of-5 + PSI + Derivative Pre-emption)<br/>• 3B: Tier Detector (Dual-Window P95/P50)<br/>• 3C: EMA Predictor (Adaptive α)"]
+            L3["<b>Layer 3: Hybrid Control Engine</b><br/><i>guardrail.py, tier_detector.py, predictor.py</i><br/>───────────────<br/>• 3A: Guardrail (3-of-5 + PSI + Derivative Pre-emption)<br/>• 3B: Tier Detector (P95/P50, window 120, hysteresis 3)<br/>• 3C: EMA Predictor (α=0.2 tetap)"]
 
             L4["<b>Layer 4: Adaptive Resource Shaping</b><br/><i>shaper.py, micro_freezer.py</i><br/>───────────────<br/>• cpu.max / memory.max Write<br/>• Micro-Freezing (cgroup.freeze)<br/>• TCP Backlog Buffering"]
 
@@ -74,7 +74,7 @@ flowchart TB
 
             L2["<b>Phase 2: Distributed Metric Monitoring</b><br/>───────────────<br/>• Akuisisi utilisasi dari cgroups<br/>• Terapkan Adaptive Sampling<br/>  (Interval rapat saat beban tinggi)"]
 
-            L3["<b>Phase 3: Policy Analysis & Prediction</b><br/>───────────────<br/>• Evaluasi Overload & Derivative Pre-emption<br/>• Klasifikasi Volatilitas (P95/P50 Dual-Window)<br/>• Prakiraan Utilisasi Masa Depan (Adaptive EMA)"]
+            L3["<b>Phase 3: Policy Analysis & Prediction</b><br/>───────────────<br/>• Evaluasi Overload & Derivative Pre-emption<br/>• Klasifikasi Volatilitas (P95/P50 Single-Window)<br/>• Prakiraan Utilisasi Masa Depan (EMA α=0.2)"]
 
             L4["<b>Phase 4: Resource Allocation Execution</b><br/>───────────────<br/>• Modifikasi Quota (CPU & Memory)<br/>• Transisi Micro-Freeze saat Idle<br/>  (Optimasi efisiensi tanpa terminasi)"]
 
@@ -123,8 +123,8 @@ File ini berfungsi sebagai **Master Daftar Isi**. Berikut adalah penjelasan baga
 
 ### 4. Layer 3: Hybrid Control Engine (Analyze & Plan)
 Layer ini adalah otak kecerdasan (S2) dari HECF yang terdiri dari 3 algoritma yang saling bekerjasama:
-*   **`framework/tier_detector.py` (3B)**: Menganalisa data dari Layer 2 untuk memisahkan beban kontainer dengan Dual-Window, apakah ia masuk Tier 1 (beban meledak-ledak/spiky), Tier 2, atau Tier 3 (beban tenang).
-*   **`framework/predictor.py` (3C)**: Menggunakan algoritma EMA (Exponential Moving Average) dengan Adaptive Alpha untuk menebak berapa CPU yang akan digunakan kontainer dan menghitung kecepatan tren naiknya (dEMA/dt).
+*   **`framework/tier_detector.py` (3B)**: Menganalisa data dari Layer 2 untuk memisahkan beban kontainer dengan satu sliding window 120 sampel, apakah ia masuk Tier 1 (beban meledak-ledak/spiky), Tier 2, atau Tier 3 (beban tenang).
+*   **`framework/predictor.py` (3C)**: Menggunakan algoritma EMA (Exponential Moving Average) dengan alpha tetap 0.2 untuk menebak berapa CPU yang akan digunakan kontainer dan menghitung kecepatan tren naiknya (dEMA/dt).
 *   **`framework/guardrail.py` (3A)**: Mengambil hasil prediksi dan turunannya dari `predictor.py` dan data dari `tier_detector.py`. Jika diprediksi akan terjadi _overload_ (kehabisan CPU) yang parah atau tren naik sangat cepat, Guardrail akan membunyikan alarm darurat proaktif.
 
 ### 5. Layer 4: Adaptive Resource Shaping (Execute)

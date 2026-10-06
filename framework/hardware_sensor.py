@@ -58,10 +58,20 @@ class PowerSensor:
                 now = time.time()
                 
                 # First read or counter wrap-around protection
-                if self.last_joules is None or joules < self.last_joules:
+                if self.last_joules is None:
                     self.last_joules = joules
                     self.last_time = now
                     return 0.0
+                if joules < self.last_joules:
+                    # Counter wrapped: unwrap with max_energy_range_uj
+                    try:
+                        rng_path = os.path.join(os.path.dirname(self.sensor_path), "max_energy_range_uj")
+                        with open(rng_path) as rf:
+                            joules += int(rf.read().strip()) / 1_000_000.0
+                    except Exception:
+                        self.last_joules = joules
+                        self.last_time = now
+                        return 0.0
                     
                 delta_j = joules - self.last_joules
                 delta_t = now - self.last_time

@@ -22,7 +22,7 @@ logging.basicConfig(
 logger = logging.getLogger("hecf.experiment")
 
 # Factorial Design Variables
-CONDITIONS = ["default_docker", "hecf_active"]
+CONDITIONS = ["default_docker", "static_cap", "reactive_only", "full_hecf"]
 WORKLOADS = ["json", "static", "db"]
 INTENSITIES = {
     "Low": {"users": 10, "spawn_rate": 1},
@@ -47,10 +47,9 @@ def setup_environment(condition: str):
     """Set environment variables for HECF and restart container."""
     env = os.environ.copy()
     
-    if condition == "default_docker":
-        env["HECF_MODE"] = "default_docker"
-    else:
-        env["HECF_MODE"] = "full_hecf"
+    env["HECF_MODE"] = condition
+    
+    if condition == "full_hecf":
         env["GUARDRAIL_CPU_THRESHOLD"] = "80"
         env["GUARDRAIL_RAM_THRESHOLD"] = "90"
         
@@ -225,7 +224,7 @@ if __name__ == "__main__":
 
     if args.demo:
         logger.info("🏃 DEMO MODE ACTIVATED: Running a quick 30-second test for presentation...")
-        CONDITIONS = ["default_docker", "hecf_active"]
+        CONDITIONS = ["default_docker", "static_cap", "reactive_only", "full_hecf"]
         WORKLOADS = ["json"]
         INTENSITIES = {"Low": {"users": 10, "spawn_rate": 1}}
         REPLICATIONS = [1]

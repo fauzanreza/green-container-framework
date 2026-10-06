@@ -34,7 +34,7 @@ flowchart TD
         STALE{"Stats<br/>stale?"}
         SKIP_STALE["Skip shaping<br/>(container mungkin mati)"]
 
-        L3B["<b>Layer 3B:</b> tier_detector.add_sample(name, cpu)<br/>tier_int = tier_detector.get_tier(name)<br/><i>Dual-Window P95/P50 + Asymmetric Hysteresis</i>"]
+        L3B["<b>Layer 3B:</b> tier_detector.add_sample(name, cpu)<br/>tier_int = tier_detector.get_tier(name)<br/><i>P95/P50 (window 120) + Symmetric Hysteresis (3)</i>"]
         L3C["<b>Layer 3C:</b> ema_pred = predictor.update(name, cpu)<br/>ema_derivative = predictor.get_derivative()<br/><i>Y(t) = α(t) × cpu + (1-α(t)) × Y(t-1)</i>"]
         L3A["<b>Layer 3A:</b> guardrail.update(name, cpu, mem, ema_pred, ema_derivative)<br/><i>3-of-5 rolling + Derivative Pre-emption + PSI + EMA adjust</i>"]
 
@@ -49,9 +49,9 @@ flowchart TD
 
         subgraph FULL_HECF["full_hecf (Sistem yang Diajukan)"]
             GR_ACTIVE{"Guardrail<br/>aktif?"}
-            GR_ACTION["action = GUARDRAIL<br/>quota = 50000 (0.5 core)<br/>mem_ratio = 0.70"]
+            GR_ACTION["action = GUARDRAIL<br/>quota = 80000 (0.8 core)<br/>mem_ratio = 0.70"]
             TIER_BRANCH{"tier_int?"}
-            T1["Tier 1 → AGGRESSIVE<br/>quota = 75000 (0.75 core)<br/>mem_ratio = 0.80"]
+            T1["Tier 1 → AGGRESSIVE<br/>quota = 80000 (0.8 core)<br/>mem_ratio = 0.80"]
             T2["Tier 2 → BALANCED<br/>quota = 90000 (0.9 core)"]
             T3["Tier 3 → SOFT<br/>quota = unlimited"]
         end

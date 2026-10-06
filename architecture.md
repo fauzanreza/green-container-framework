@@ -77,8 +77,8 @@ Runs at cold start to build a complete hardware and environment profile of the h
   `/sys/class/powercap/intel-rapl/` and AMD energy at `/sys/class/hwmon/`. If found,
   real-time electrical data is used. If blocked (e.g., inside a cloud VPS), the
   framework logs a notice and falls back to the validated software estimation model.
-- **Cold-Start Fallback Policy:** for the first `30` samples (revised from 120 —
-  at 30s polling, 120 samples = 60 min > the 30-min run), the system forces
+- **Cold-Start Fallback Policy:** for the first `10` samples (revised — at 30s
+  polling, 10 samples = 5 min warm-up, fits the 20-min run), the system forces
   **Tier 2 (Balanced)**.
 - **Container Tagging:** reads Docker container labels to classify each target as:
   - `priority` — e.g. database / Async DB containers. Never receive a hard CPU cap
@@ -123,7 +123,7 @@ bypassing the Docker REST API to minimize monitoring overhead:
 
 **Adaptive Sampling (proposal §3.2.3):**
 
-- If CPU utilization at `t-1` **> 60%** → poll every **10 seconds**
+- If CPU utilization at `t-1` **> 60%**, or any container is escalated (Guardrail/Aggressive) → poll every **10 seconds**
 - Otherwise → poll every **30 seconds**
 
 **Event-Driven Idle Detection:** Micro-Freezing idle state is detected via
@@ -144,7 +144,7 @@ The centralized decision layer combining reactive, analytic, and proactive contr
   - The 3-of-5 rule avoids false positives on harmless micro-spikes while still
     reacting before OOM.
   - **Derivative Pre-emptive Trigger:** If the EMA prediction trend is rising fast
-    (`d(EMA)/dt > 15%` per sample) AND `EMA > 60%`, Guardrail triggers *before* CPU
+    (`d(EMA)/dt > 5.0` CPU-points per sample) AND `EMA > 50%`, Guardrail triggers *before* CPU
     hits the 80% threshold. (Proactive Throttling Pipeline)
   - **PSI Internal Signal:** Layer 3A reads `<cgroup>/cpu.pressure` (`some avg10`)
     as a supplementary internal signal alongside CPU/RAM thresholds. If PSI
@@ -152,9 +152,8 @@ The centralized decision layer combining reactive, analytic, and proactive contr
     elevated (logged as `GUARDRAIL+PSI`). PSI is NOT a new tracked metric.
 
 - **3B. Tier Detector (`framework/tier_detector.py`)** — *analytic*
-  - **Dual-Window Architecture:** Uses a **Short Window** (10 samples) for rapid burst detection and a **Long Window** (60 samples) for baseline trending.
+  - **Single-Window Architecture:** one sliding window of `TIER_WINDOW` = 120 samples per container.
   - Computes `spike_ratio = P95 / P50` of CPU utilization via `numpy.percentile()`.
-  - **Fast-Path Escalation:** If the Short Window spike ratio exceeds 2.0, the system escalates directly to Tier 1 without delay.
 
   | Tier | Label | Condition |
   | --- | --- | --- |
@@ -162,15 +161,15 @@ The centralized decision layer combining reactive, analytic, and proactive contr
   | 2 | Balanced | `1.5 ≤ spike_ratio ≤ 2.0` |
   | 3 | Soft | `spike_ratio < 1.5` |
 
-  - **Asymmetric Hysteresis:** A tier transition commits based on the direction of change:
-    - *Escalation (Soft → Aggressive):* 1 sample (fast response to threats)
-    - *De-escalation (Aggressive → Soft):* 5 consecutive samples (prevents premature release)
+  - **Symmetric Hysteresis:** a tier transition (either direction) commits after
+    `TIER_HYSTERESIS_SAMPLES` = 3 consecutive samples. Revised from asymmetric 1/5:
+    experiments showed 5 samples × 10–30 s kept throttling active long after a spike
+    ended, violating the Spike P95 SLA and cutting throughput by ~33%.
 
 - **3C. Predictor (`framework/predictor.py`)** — *proactive*
-  - **Adaptive Alpha EMA (Exponential Moving Average):** Dynamically adjusts alpha based on recent CPU variance.
-    - High variance (spike) → `alpha = 0.8` (fast tracking)
-    - Low variance (stable) → `alpha = 0.05` (noise suppression)
-  - O(1) time and memory per update. Maintains a small 10-sample buffer for variance.
+  - **Fixed-alpha EMA (Exponential Moving Average):** `alpha = 0.2` (PRD §11).
+    `Y(t) = 0.2·CPU(t) + 0.8·Y(t-1)`.
+  - O(1) time and memory per update.
   - Provides the `d(EMA)/dt` derivative signal to the Guardrail for pre-emptive throttling.
 
 #### Layer 4: Adaptive Resource Shaping (`framework/shaper.py`)
@@ -432,7 +431,7 @@ Each run: 20 minutes total (5-minute warm-up + 15-minute steady-state evaluation
 │   ├── hardware_sensor.py       # Layer 1: Intel RAPL / AMD energy detection
 │   ├── monitor.py               # Layer 2: cgroupfs v2 reader, adaptive polling
 │   ├── guardrail.py             # Layer 3A: 3-of-5 emergency guardrail
-│   ├── tier_detector.py         # Layer 3B: 120-window P95/P50 tier detection
+│   ├── tier_detector.py         # Layer 3B: 120-window P95/P50 tier detection, symmetric hysteresis (3)
 │   ├── predictor.py             # Layer 3C: fixed-alpha EMA (0.2), O(1)
 │   ├── shaper.py                # Layer 4: cgroups v2 update handler
 │   ├── energy.py                # Hybrid energy estimator (HW/SW, Joule/kWh)
@@ -480,7 +479,7 @@ required by proposal §4.4.1.
 
 | Constant | Value | Source |
 | --- | --- | --- |
-| `COLD_START_SAMPLES` | 30 (revised) | Gap audit: 120×30s > 30min run |
+| `COLD_START_SAMPLES` | 10 (revised) | 10×30s = 5 min warm-up fits 20 min run |
 | `FALLBACK_TIER` | 2 (Balanced) | proposal §3.2.2 |
 | `SAMPLING_CPU_THRESHOLD` | 60% | proposal §3.2.3 |
 | `SAMPLING_INTERVAL_HIGH` | 10s | proposal §3.2.3 |
@@ -502,7 +501,9 @@ required by proposal §4.4.1.
 | `P_IDLE_WATTS` | Dynamic (cpu_count × 3.75W) | proposal §3.5.1 |
 | `P_MAX_WATTS` | Dynamic (cpu_count × 13.5W) | proposal §3.5.1 |
 | `STATIC_CAP_CPU_PERCENT` | 80% (baseline mode only) | proposal §3.4.4 |
-| `MICRO_FREEZE_IDLE_TRIGGER_S` | 2.0 | Layer 4 Micro-Freezing |
+| `CPU_QUOTA_GUARDRAIL` / `CPU_QUOTA_AGGRESSIVE` | 80000 µs (0.8 core) | Relaxed from 0.5 / 0.75 after Spike SLA violation |
+| `Guardrail derivative trigger` | d(EMA)/dt > 5.0 & EMA > 50% | Tuned for fixed α=0.2 |
+| `MICRO_FREEZE_IDLE_TRIGGER_S` | 0.8 | Layer 4 Micro-Freezing |
 | `MICRO_FREEZE_MAX_DURATION_MS` | 1000 | Layer 4 Micro-Freezing cap |
 
 ---

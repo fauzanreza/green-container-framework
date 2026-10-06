@@ -16,7 +16,7 @@ flowchart TD
     LOWER_THRESH["cpu_thresh = 75%<br/>(EMA-adjusted)"]
     NORMAL_THRESH["cpu_thresh = 80%<br/>(default)"]
 
-    DERIV_CHECK{"ema_derivative > 15%<br/>& ema_pred > 60%?"}
+    DERIV_CHECK{"ema_derivative > 5.0<br/>& ema_pred > 50%?"}
     DERIV_TRUE["is_over = True<br/>(Proactive Derivative)"]
     EVAL_OVER["Evaluasi overload:<br/>is_over = cpu > thresh OR mem > 90%"]
 
@@ -75,7 +75,7 @@ flowchart TD
 ## Mengapa Ini Inovasi S2?
 
 1. **Rolling Boolean Array (3-of-5):** Bukan sekadar `if cpu > 80%`. Algoritma ini mengevaluasi pola temporal — hanya memicu intervensi jika anomali **persisten**, bukan sesaat.
-2. **Derivative Pre-emptive Trigger:** Memantau `d(EMA)/dt`. Jika tren naik tajam (>15% per sampel) dan baseline sudah tinggi (>60%), Guardrail memicu pemotongan *sebelum* threshold keras tertembus.
+2. **Derivative Pre-emptive Trigger:** Memantau `d(EMA)/dt`. Jika tren naik tajam (>5 poin CPU per sampel) dan baseline sudah tinggi (>50%), Guardrail memicu pemotongan *sebelum* threshold keras tertembus.
 3. **EMA-Adjusted Threshold:** Threshold bergeser secara proaktif berdasarkan prediksi EMA dari Layer 3C. Ini adalah integrasi antar-algoritma (prediktif → reaktif).
 4. **PSI Confirmation Signal:** Menggunakan sinyal *Pressure Stall Information* dari kernel Linux sebagai variabel konfirmasi tambahan, meningkatkan akurasi keputusan.
 

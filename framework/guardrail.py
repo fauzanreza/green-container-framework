@@ -26,9 +26,9 @@ logger = logging.getLogger("hecf.guardrail")
 
 # Derivative filter thresholds (B4 optimization)
 # d(EMA)/dt > this value triggers proactive intervention
-_DERIVATIVE_THRESHOLD = 15.0   # 15% EMA rise per sample = aggressive ramp
+_DERIVATIVE_THRESHOLD = 5.0   # adjusted for fixed alpha 0.2
 # EMA must be above this baseline before derivative triggers (avoid false positives on low-CPU noise)
-_DERIVATIVE_EMA_FLOOR = 60.0
+_DERIVATIVE_EMA_FLOOR = 50.0
 
 
 class Guardrail:

@@ -105,21 +105,21 @@ Full technical spec: `architecture.md` §3.
     Docker REST API to minimize overhead.
   - **`memory.stat` over `memory.current`:** computes `actual = memory.current -
     inactive_file` to exclude reclaimable page-cache from RAM measurement (Metric #2).
-  - **Adaptive Sampling:** 10s interval when CPU(t-1) > 60%; 30s otherwise.
+  - **Adaptive Sampling:** 10s interval when CPU(t-1) > 60% OR any container is in an escalated state (Guardrail/Aggressive); 30s otherwise.
   - **Event-Driven Idle Detection:** Micro-Freezing idle state uses `cgroup.events`
     `populated 0` signal instead of polling-based CPU threshold, eliminating
     false-idle/false-active during inter-poll gaps.
 
 - **Layer 3: Hybrid Control Engine**
   - **3A. Guardrail:** emergency throttle if CPU > 80% OR RAM > 90% in ≥3 of last 5
-    samples. Includes a **Derivative Pre-emptive Trigger** (`d(EMA)/dt > 15%`) to throttle before thresholds are hit.
-  - **3B. Tier Detection:** Dual-Window architecture (10 short, 60 long); `spike_ratio = P95/P50`. Fast-path escalation directly to Tier 1 on sudden bursts.
+    samples. Includes a **Derivative Pre-emptive Trigger** (`d(EMA)/dt > 5.0` CPU-points/sample AND `EMA > 50%`) to throttle before thresholds are hit.
+  - **3B. Tier Detection:** Single sliding window (`TIER_WINDOW` = 120 samples); `spike_ratio = P95/P50`.
     - Tier 1 (Aggressive): ratio > 2.0
     - Tier 2 (Balanced): 1.5 ≤ ratio ≤ 2.0
     - Tier 3 (Soft): ratio < 1.5
-  - **3C. Prediction:** Adaptive Alpha EMA based on variance (0.05 to 0.8), O(1) memory. Fine-tunes Guardrail
+  - **3C. Prediction:** Fixed-alpha EMA (`alpha = 0.2`), O(1) time and memory. Fine-tunes Guardrail
     threshold sensitivity ahead of time and provides the derivative signal.
-  - **Asymmetric Hysteresis:** tier escalation takes only 1 sample (fast response), while de-escalation requires 5 stable samples, preventing rapid oscillation noise in Metrics #1/#5.
+  - **Symmetric Hysteresis:** tier transitions (up or down) require 3 consecutive samples (`TIER_HYSTERESIS_SAMPLES`). Revised from asymmetric 1/5 after experiments showed slow de-escalation held throttling too long and violated the Spike SLA.
   - **PSI Internal Signal:** `cpu.pressure` `some avg10` supplements the Guardrail's
     CPU/RAM thresholds as an internal control signal (not a new tracked metric).
 

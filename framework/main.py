@@ -489,7 +489,11 @@ def main():
         if "micro_freezer" in security:
             security["micro_freezer"].cleanup(seen_container_ids)
 
-        current_interval = get_adaptive_interval(max_cpu_seen)
+        # Force 10s polling during Spike/Escalated state to prevent slow de-escalation
+        if any(row[5] in ("GUARDRAIL", "AGGRESSIVE", "BALANCED", "EDOS_FREEZE") for row in csv_rows):
+            current_interval = SAMPLING_INTERVAL_HIGH
+        else:
+            current_interval = get_adaptive_interval(max_cpu_seen)
 
 
 def _apply_security_gates(targets_meta: dict, security: dict) -> dict:
