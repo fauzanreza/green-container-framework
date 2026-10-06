@@ -22,7 +22,7 @@ logging.basicConfig(
 logger = logging.getLogger("hecf.experiment")
 
 # Factorial Design Variables
-CONDITIONS = ["default_docker", "static_cap", "reactive_only", "full_hecf"]
+CONDITIONS = ["default_docker", "full_hecf"]
 WORKLOADS = ["json", "static", "db"]
 INTENSITIES = {
     "Low": {"users": 10, "spawn_rate": 1},
@@ -224,7 +224,7 @@ if __name__ == "__main__":
 
     if args.demo:
         logger.info("🏃 DEMO MODE ACTIVATED: Running a quick 30-second test for presentation...")
-        CONDITIONS = ["default_docker", "static_cap", "reactive_only", "full_hecf"]
+        CONDITIONS = ["default_docker", "full_hecf"]
         WORKLOADS = ["json"]
         INTENSITIES = {"Low": {"users": 10, "spawn_rate": 1}}
         REPLICATIONS = [1]
