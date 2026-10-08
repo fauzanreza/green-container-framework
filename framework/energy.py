@@ -26,12 +26,20 @@ def estimate_power(cpu_percent: float, p_idle: float, p_max: float,
         # Container Power = Total HW Power * (Container CPU / Total CPU Capacity)
         total_capacity = float(cpu_count * 100.0)
         fraction = max(0.0, cpu_percent) / total_capacity
-        return round(hw_power * fraction, 3)
+        
+        # Avoid absolute 0.0 if CPU reading is 0.0 (e.g. stale read or completely idle)
+        calculated = hw_power * fraction
+        if calculated <= 0.0:
+            return round(p_idle, 3)
+        return round(calculated, 3)
     else:
         # Software Fallback: Linear Model
         # P(t) = P_idle + (P_max - P_idle) × utilization
         utilization = max(0.0, min(cpu_percent, 100.0)) / 100.0
-        return round(p_idle + (p_max - p_idle) * utilization, 3)
+        calculated = p_idle + (p_max - p_idle) * utilization
+        if calculated <= 0.0:
+            return round(p_idle, 3)
+        return round(calculated, 3)
 
 
 def estimate_energy(power_watt: float, duration_seconds: float) -> float:
