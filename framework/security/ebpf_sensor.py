@@ -24,7 +24,7 @@ logger = logging.getLogger("hecf.security.ebpf")
 # Try to import BCC — graceful fallback if not available
 _BCC_AVAILABLE = False
 try:
-    from bcc import BPF
+    from bcc import BPF  # type: ignore
     _BCC_AVAILABLE = True
 except ImportError:
     pass

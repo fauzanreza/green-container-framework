@@ -29,6 +29,7 @@ from .overhead_tracker import OverheadTracker
 from .modes         import OperationMode
 from .config        import (
     SAMPLING_INTERVAL_LOW,
+    SAMPLING_INTERVAL_HIGH,
     CPU_QUOTA_GUARDRAIL,
     CPU_QUOTA_AGGRESSIVE,
     CPU_QUOTA_BALANCED,
