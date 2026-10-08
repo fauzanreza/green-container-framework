@@ -15,9 +15,11 @@ def estimate_power(cpu_percent: float, p_idle: float, p_max: float,
                    Frozen containers consume exactly 0% CPU — their power
                    contribution is 0W (not P_idle, which is host baseline).
     """
-    # Micro-Frozen container = 0% CPU = 0W power contribution for THIS container
+    # Micro-Frozen container = 0% CPU. Instead of returning 0.0W (which breaks
+    # datasets that lack physical sensors), we fall back to the host's idle power
+    # as the baseline footprint for the container.
     if is_frozen:
-        return 0.0
+        return round(p_idle, 3)
 
     if hw_power is not None and hw_power > 0:
         # Hardware-True: Proportional Power Apportionment

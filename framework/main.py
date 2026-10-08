@@ -387,10 +387,16 @@ def main():
                 tier_map = {1: "AGGRESSIVE", 2: "BALANCED", 3: "SOFT"}
                 tier_str = tier_map.get(tier_int, "SOFT")
                 
+                spike_ratio = tier_stats.get("spike_ratio", 0.0)
+                
                 if guardrail_active:
                     action = "GUARDRAIL"
                     quota = CPU_QUOTA_GUARDRAIL
                     mem_ratio = MEM_CAP_GUARDRAIL_RATIO
+                elif spike_ratio > 1.5:
+                    action = "PREEMPTIVE_SCALEUP"
+                    quota = CPU_QUOTA_SOFT
+                    mem_ratio = None
                 elif tier_int == 1:
                     action = "AGGRESSIVE"
                     quota = CPU_QUOTA_AGGRESSIVE

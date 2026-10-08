@@ -89,6 +89,12 @@ def _write_cpu(cgroup_path: str, container_name: str,
     """Write CPU limits to cpu.max with read-back validation."""
     cpu_max_path = os.path.join(cgroup_path, "cpu.max")
 
+    # Buffer Minimum / Guardrail
+    # Minimum 0.2 CPU Core so it doesn't throttle down to 0 and get stuck during spikes
+    MIN_CPU_CORE = 0.2
+    if 0 < cpu_quota < int(cpu_period * MIN_CPU_CORE):
+        cpu_quota = int(cpu_period * MIN_CPU_CORE)
+
     try:
         if cpu_quota <= 0:
             expected = "max"

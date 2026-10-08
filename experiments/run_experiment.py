@@ -59,6 +59,9 @@ def setup_environment(condition: str):
     metrics_file = os.path.join(PROJECT_DIR, "metrics.csv")
     open(metrics_file, 'w').close()
         
+    # Berikan hak akses baca khusus ke file powercap kernel Linux sebelum bereksperimen
+    subprocess.run(["chmod", "-R", "+r", "/sys/class/powercap/"], check=False)
+
     # Restart HECF container using docker-compose from portfolio-app directory
     subprocess.run(["docker", "compose", "up", "-d", "hecf"], cwd=COMPOSE_DIR, env=env, check=False)
     time.sleep(5)
@@ -110,6 +113,7 @@ def run_locust(condition: str, workload: str, intensity_name: str, duration: int
             log_file.write(f"Duration     : {duration} seconds\n")
             log_file.write(f"============================================================\n\n")
             
+            consecutive_zero_metrics = 0
             process = subprocess.Popen(cmd, env=env, stdout=log_file, stderr=subprocess.STDOUT)
             start_time = time.time()
             while True:
@@ -141,6 +145,29 @@ def run_locust(condition: str, workload: str, intensity_name: str, duration: int
 
                 # Print dynamic progress bar with short info
                 print(f"\r  \033[36mProgress:\033[0m [{bar}] {progress*100:.1f}% ({remaining}s) {info_text}{global_text}", end="", flush=True)
+                
+                # Healthcheck for metrics.csv (zero power/cpu)
+                try:
+                    metrics_file = os.path.join(PROJECT_DIR, "metrics.csv")
+                    if os.path.exists(metrics_file):
+                        with open(metrics_file, "r") as f:
+                            lines = f.readlines()
+                            if len(lines) > 1:
+                                last_line = lines[-1].strip().split(",")
+                                if len(last_line) > 7:
+                                    power_str = last_line[6] # power_watt index
+                                    if power_str == "0.0":
+                                        consecutive_zero_metrics += 1
+                                    else:
+                                        consecutive_zero_metrics = 0
+                                        
+                                    if consecutive_zero_metrics > 5:
+                                        logger.error("\n[HEALTHCHECK] 0.0 power_watt detected for >5s. Restarting HECF daemon...")
+                                        subprocess.run(["docker", "compose", "restart", "hecf"], cwd=COMPOSE_DIR, env=env, check=False)
+                                        consecutive_zero_metrics = 0
+                except Exception:
+                    pass
+                
                 time.sleep(1)
                 
             print(f"\r  \033[32mProgress:\033[0m [{'█'*20}] 100.0% (0s remaining) [{condition} | {workload} | {intensity_name}]\n", flush=True)
