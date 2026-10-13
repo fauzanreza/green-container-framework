@@ -1,60 +1,66 @@
-# Flowchart — Profiler.discover_containers() (Layer 1)
+# Flowchart — profiler.discover_containers() (Layer 1)
 
-> **Kode Sumber:** `framework/profiler.py` → fungsi `discover_containers()` (baris 94–260)
-> **Posisi di Diagram:** Layer 1 — Environment Profiler → Container Discovery
+> **Kode Sumber:** `framework/profiler.py` → fungsi `discover_containers()` (baris 94–266)
+> **Posisi di Diagram:** Layer 1 — Environment Profiler → Container Discovery & Tagging
 > **Kategori:** 🛠️ TOOLS & INFRASTRUKTUR (S1)
 
-Sistem pencarian target otomatis melalui socket Docker. Dilengkapi dengan deteksi keamanan (Safety Gate) yang mencegah modifikasi pada container infrastruktur dan database secara hardcoded untuk meminimalisasi risiko sistem crash.
+Sistem penemuan kontainer otomatis melalui Docker SDK (`docker.from_env()`). Mengimplementasikan penyaringan multi-tahap: eliminasi kontainer internal HECF, daftar eksklusi statis (`EXCLUDED_CONTAINERS`), deteksi port kritis database/SSH (`CRITICAL_PORTS_EXCLUDE`), auto-priority untuk layanan web dan proxy (`CRITICAL_PORTS_PRIORITY` & `NETWORK_INFRA_PATTERNS`), integrasi status dinamis (`priority_map.json` dan `targets.json`), pencatatan snapshot (`discovered_containers.json`), dan penerapan filter whitelist.
 
 ```mermaid
 flowchart TD
     START(["discover_containers()"])
 
-    CONNECT["Connect ke Docker API (docker.from_env)"]
+    CONNECT["Connect ke Docker Daemon (docker.from_env())<br/>running = client.containers.list()"]
     CONN_ERR{"Koneksi gagal?"}
-    RETURN_EMPTY(["Return []"])
+    RETURN_EMPTY(["Return {}"])
 
-    LOAD_CONFIG["Load TARGET_CONTAINERS & CONTAINER_PRIORITY"]
+    READ_SHARED["Baca shared state:<br/>• priority_map.json<br/>• targets.json (targets_whitelist)"]
 
-    LOOP(["Iterasi container dalam client.containers.list()"])
+    LOOP(["FOR EACH c in running"])
 
-    CHECK_SELF{"container.name<br/>== HECF_CONTAINER_NAME?"}
-    SKIP_SELF["Skip (Hindari self-throttling)"]
+    CHECK_SELF{"self_hostname<br/>in c.id?"}
+    SKIP_SELF["Skip (Hindari self-managing HECF)"]
 
-    CHECK_EXCLUDED{"container.name in<br/>EXCLUDED_CONTAINERS?"}
-    SKIP_EXCLUDED["Skip (Infrastruktur kritis)"]
+    CHECK_EXCLUDED{"name in<br/>EXCLUDED_CONTAINERS?<br/>(hecf, cloudflared, tailscale, wireguard)"}
+    SKIP_EXCLUDED["Skip (Infrastruktur kritis mutlak)"]
 
-    CHECK_PORTS["Inspeksi container.ports"]
-    PORT_DB{"Port DB terbuka?<br/>(3306, 5432, 6379, 27017)"}
-    SKIP_DB["Skip (Mencegah korupsi DB)"]
+    PARSE_PORTS["Parse bound_ports dari c.ports"]
+    PORT_EXCLUDE{"Port ada di<br/>CRITICAL_PORTS_EXCLUDE?<br/>(DB: 3306, 5432, 6379, 27017, dll<br/>SSH: 22; Docker: 2376/2377)"}
+    SKIP_PORT_EXCLUDE["Log [AUTO-EXCLUDE]: binds port kritis<br/>Skip container dari HECF"]
 
-    PORT_WEB{"Port Web terbuka?<br/>(80, 443, 8080, 8443)"}
-    PRIO_WEB["Set priority = True<br/>(auto_priority_reason)"]
+    PORT_PRIO{"Port ada di<br/>CRITICAL_PORTS_PRIORITY?<br/>(Web: 80, 443, 8080, 8443; DNS: 53; NTP: 123)"}
+    SET_PORT_PRIO["Set auto_priority_reason<br/>(e.g. 'port 80 (HTTP)')"]
 
-    CHECK_MANUAL_PRIO{"container.name in<br/>CONTAINER_PRIORITY?"}
-    PRIO_MANUAL["Override weight dari config"]
-    CHECK_LABEL{"Label 'hecf.priority' ada?"}
-    PRIO_LABEL["Override weight dari label"]
+    CHECK_PRIO_MAP{"name in<br/>priority_map.json?"}
+    PRIO_FROM_MAP["priority = (priority_map[name] == 'high')"]
+    CHECK_LABEL{"Label Docker<br/>'hecf.priority' == 'high'?"}
+    PRIO_FROM_LABEL["priority = True"]
+    PRIO_DEFAULT["priority = False"]
 
-    CHECK_NAME{"Regex match (nginx|traefik)?"}
-    PRIO_PROXY["Set weight = 3 (High Prio)"]
+    OVERRIDE_PORT_PRIO{"auto_priority_reason<br/>ada & priority==False?"}
+    APPLY_PORT_PRIO["priority = True<br/>Log [AUTO-PRIORITY]"]
 
-    APPEND["Append ke container_targets"]
+    CHECK_NET_INFRA{"name / image cocok pattern di<br/>NETWORK_INFRA_PATTERNS?<br/>(nginx, caddy, traefik, haproxy, envoy, tailscale, dll)"}
+    APPLY_NET_PRIO["priority = True<br/>Log [AUTO-PRIORITY] infra pattern"]
+
+    REGISTER["Simpan ke all_discovered[name]:<br/>{id, priority, pid, image, status, ports, auto_reason}"]
     NEXT["Lanjut ke container berikutnya"]
 
-    WRITE_JSON["Tulis discovered_containers.json<br/>(untuk Dashboard UI — semua non-excluded)"]
+    WRITE_DISC["Tulis discovered_containers.json<br/>(Semua kontainer discoverable untuk UI Dashboard)"]
 
-    FILTER_TARGETS{"TARGET_CONTAINERS<br/>tidak kosong?"}
-    DO_FILTER["Filter container_targets<br/>hanya yang ada di list"]
-    KEEP_ALL["Keep semua container_targets"]
+    CHECK_WL{"targets_whitelist<br/>tidak kosong?"}
+    WL_FILTER["Mode Whitelist:<br/>targets = all_discovered difilter hanya yang ada di targets.json"]
+    CHECK_STRICT{"STRICT_WHITELIST_MODE<br/>== True?"}
+    STRICT_EMPTY["targets = {}<br/>(Tolak kelola apa pun sampai whitelist diisi)"]
+    OPEN_MODE["Open Mode (Default):<br/>targets = all_discovered (kelola semua yang ditemukan)"]
 
-    RETURN(["Return container_targets"])
+    RETURN(["Return targets (dict: name -> meta)"])
 
     START --> CONNECT
     CONNECT --> CONN_ERR
     CONN_ERR -->|Ya| RETURN_EMPTY
-    CONN_ERR -->|Tidak| LOAD_CONFIG
-    LOAD_CONFIG --> LOOP
+    CONN_ERR -->|Tidak| READ_SHARED
+    READ_SHARED --> LOOP
 
     LOOP --> CHECK_SELF
     CHECK_SELF -->|Ya| SKIP_SELF
@@ -62,129 +68,122 @@ flowchart TD
     SKIP_SELF --> NEXT
 
     CHECK_EXCLUDED -->|Ya| SKIP_EXCLUDED
-    CHECK_EXCLUDED -->|Tidak| CHECK_PORTS
+    CHECK_EXCLUDED -->|Tidak| PARSE_PORTS
     SKIP_EXCLUDED --> NEXT
 
-    CHECK_PORTS --> PORT_DB
-    PORT_DB -->|Ya| SKIP_DB
-    PORT_DB -->|Tidak| PORT_WEB
-    SKIP_DB --> NEXT
+    PARSE_PORTS --> PORT_EXCLUDE
+    PORT_EXCLUDE -->|Ya| SKIP_PORT_EXCLUDE
+    PORT_EXCLUDE -->|Tidak| PORT_PRIO
+    SKIP_PORT_EXCLUDE --> NEXT
 
-    PORT_WEB -->|Ya| PRIO_WEB
-    PORT_WEB -->|Tidak| CHECK_MANUAL_PRIO
-    PRIO_WEB --> CHECK_MANUAL_PRIO
+    PORT_PRIO -->|Ya| SET_PORT_PRIO
+    PORT_PRIO -->|Tidak| CHECK_PRIO_MAP
+    SET_PORT_PRIO --> CHECK_PRIO_MAP
 
-    CHECK_MANUAL_PRIO -->|Ya| PRIO_MANUAL
-    CHECK_MANUAL_PRIO -->|Tidak| CHECK_LABEL
-    PRIO_MANUAL --> CHECK_NAME
-    CHECK_LABEL -->|Ya| PRIO_LABEL
-    CHECK_LABEL -->|Tidak| CHECK_NAME
-    PRIO_LABEL --> CHECK_NAME
+    CHECK_PRIO_MAP -->|Ya| PRIO_FROM_MAP
+    CHECK_PRIO_MAP -->|Tidak| CHECK_LABEL
+    CHECK_LABEL -->|Ya| PRIO_FROM_LABEL
+    CHECK_LABEL -->|Tidak| PRIO_DEFAULT
 
-    CHECK_NAME -->|Ya| PRIO_PROXY
-    CHECK_NAME -->|Tidak| APPEND
-    PRIO_PROXY --> APPEND
-    APPEND --> NEXT
+    PRIO_FROM_MAP --> OVERRIDE_PORT_PRIO
+    PRIO_FROM_LABEL --> OVERRIDE_PORT_PRIO
+    PRIO_DEFAULT --> OVERRIDE_PORT_PRIO
 
+    OVERRIDE_PORT_PRIO -->|Ya| APPLY_PORT_PRIO
+    OVERRIDE_PORT_PRIO -->|Tidak| CHECK_NET_INFRA
+    APPLY_PORT_PRIO --> CHECK_NET_INFRA
+
+    CHECK_NET_INFRA -->|Ya (dan priority==False)| APPLY_NET_PRIO
+    CHECK_NET_INFRA -->|Tidak| REGISTER
+    APPLY_NET_PRIO --> REGISTER
+
+    REGISTER --> NEXT
     NEXT -->|Masih ada| LOOP
-    NEXT -->|Selesai| WRITE_JSON
+    NEXT -->|Selesai| WRITE_DISC
 
-    WRITE_JSON --> FILTER_TARGETS
-    FILTER_TARGETS -->|Ya| DO_FILTER
-    FILTER_TARGETS -->|Tidak| KEEP_ALL
-    DO_FILTER --> RETURN
-    KEEP_ALL --> RETURN
+    WRITE_DISC --> CHECK_WL
+    CHECK_WL -->|Ya| WL_FILTER
+    CHECK_WL -->|Tidak| CHECK_STRICT
+    CHECK_STRICT -->|Ya| STRICT_EMPTY
+    CHECK_STRICT -->|Tidak| OPEN_MODE
+
+    WL_FILTER --> RETURN
+    STRICT_EMPTY --> RETURN
+    OPEN_MODE --> RETURN
 ```
+
+---
 
 ## Alur Logika Konseptual
 
 ```mermaid
 flowchart TD
-    START(["START: Service Discovery"])
+    START(["START: Service Discovery & Tagging"])
 
-    HUBUNGI["Fetch Docker API container_list"]
-    GAGAL{"Apakah Terjadi<br/>API Error?"}
-    KOSONG(["END: Abort, Return Empty List"])
+    DOCKER_LIST["Ambil daftar seluruh kontainer aktif dari Docker Daemon"]
+    API_GAGAL{"Docker API Error?"}
+    KOSONG(["END: Abort — Return {}"])
 
-    BACA_PENGATURAN["Load Config:<br/>Priority Map & Target List"]
+    AMBIL_SHARED["Baca priority_map.json & targets.json"]
 
-    PERIKSA(["Iterasi Container Target"])
+    PERIKSA(["Iterasi Kontainer Aktif"])
 
-    DIRI_SENDIRI{"Apakah Self-Instance<br/>(HECF Engine)?"}
-    LEWAT1["Bypass: Hindari Self-Control"]
+    CEK_DIRI{"Apakah Kontainer HECF Sendiri?"}
+    LEWAT_DIRI["Bypass: Mencegah Loop Self-Throttling"]
 
-    DILARANG{"Apakah Masuk<br/>Exclusion List?"}
-    LEWAT2["Bypass: Infrastruktur Kritis"]
+    CEK_STATIS{"Apakah Masuk Daftar EXCLUDED_CONTAINERS?<br/>(VPN / Tunnel)"}
+    LEWAT_STATIS["Bypass: Mencegah Putus Koneksi Host"]
 
-    CEK_PORT["Inspeksi Port Binding"]
-    PORT_BAHAYA{"Apakah Expose DB Ports?<br/>(3306, 5432, dll)"}
-    LEWAT3["Bypass: Hindari I/O Corrupt"]
+    CEK_PORT_KRITIS{"Apakah Menjalankan Port Kritis Database/SSH?<br/>(3306, 5432, 6379, 27017, 22, 2376/2377)"}
+    LEWAT_KRITIS["Bypass: Auto-Exclude (Mencegah Korupsi Data DB)"]
 
-    PORT_WEB{"Apakah Expose Web Ports?<br/>(80, 443, 8080, 8443)"}
-    PENTING_WEB["Set priority = True<br/>(auto_priority_reason)"]
+    TETAPKAN_PRIO["Tentukan Prioritas:<br/>1. Overrides dari priority_map.json<br/>2. Label Docker hecf.priority<br/>3. Auto-Priority Port Web (80, 443, 8080)<br/>4. Auto-Priority Pola Nama Proxy/DNS"]
 
-    CEK_SETTING{"Apakah Ada<br/>Manual Priority?"}
-    PAKAI_MANUAL["Apply Manual Weight"]
-    CEK_LABEL{"Apakah Ada<br/>Label Priority?"}
-    PAKAI_LABEL["Apply Label Weight"]
+    CATAT_UNIVERSAL["Daftarkan ke Inventaris Universal (all_discovered)"]
+    LANJUT["Kontainer Berikutnya"]
 
-    CEK_NAMA{"Apakah Nama Cocok Regex Infra<br/>(nginx/traefik)?"}
-    PENTING_INFRA["Set Prio: Network Infra"]
+    DUMP_DISC["Tulis snapshot ke discovered_containers.json<br/>(Sumber Data Kartu Panel Dashboard)"]
 
-    MASUKKAN["Register ke Inventaris"]
+    CEK_MODE_SCOPE{"Apakah targets.json Berisi Nama Kontainer?"}
+    TERAPKAN_WL["Mode Whitelist: Kelola HANYA kontainer yang dipilih pengguna"]
+    CEK_STRICT_MODE{"Apakah STRICT_WHITELIST_MODE Aktif?"}
+    MODE_STRICT["Strict Mode: Kosongkan target sampai dipilih"]
+    TERAPKAN_OPEN["Mode Terbuka: Kelola seluruh kontainer yang lolos filter"]
 
-    LANJUT["Next Container"]
+    SELESAI(["END: Return Target Terpilih (dict)"])
 
-    TULIS["Sync ke discovered_containers.json<br/>(semua non-excluded untuk Dashboard)"]
+    START --> DOCKER_LIST
+    DOCKER_LIST --> API_GAGAL
+    API_GAGAL -->|Ya| KOSONG
+    API_GAGAL -->|Tidak| AMBIL_SHARED
+    AMBIL_SHARED --> PERIKSA
 
-    CEK_WHITELIST{"Apakah Whitelist Mode<br/>Aktif?"}
-    WHITELIST["Apply Whitelist Filter"]
-    SEMUA["Promiscuous Mode (All)"]
+    PERIKSA --> CEK_DIRI
+    CEK_DIRI -->|Ya| LEWAT_DIRI
+    CEK_DIRI -->|Tidak| CEK_STATIS
+    LEWAT_DIRI --> LANJUT
 
-    SELESAI(["END: Return Filtered Targets"])
+    CEK_STATIS -->|Ya| LEWAT_STATIS
+    CEK_STATIS -->|Tidak| CEK_PORT_KRITIS
+    LEWAT_STATIS --> LANJUT
 
-    START --> HUBUNGI
-    HUBUNGI --> GAGAL
-    GAGAL -->|Ya| KOSONG
-    GAGAL -->|Tidak| BACA_PENGATURAN
-    BACA_PENGATURAN --> PERIKSA
+    CEK_PORT_KRITIS -->|Ya| LEWAT_KRITIS
+    CEK_PORT_KRITIS -->|Tidak| TETAPKAN_PRIO
+    LEWAT_KRITIS --> LANJUT
 
-    PERIKSA --> DIRI_SENDIRI
-    DIRI_SENDIRI -->|Ya| LEWAT1
-    DIRI_SENDIRI -->|Tidak| DILARANG
-    LEWAT1 --> LANJUT
+    TETAPKAN_PRIO --> CATAT_UNIVERSAL
+    CATAT_UNIVERSAL --> LANJUT
 
-    DILARANG -->|Ya| LEWAT2
-    DILARANG -->|Tidak| CEK_PORT
-    LEWAT2 --> LANJUT
+    LANJUT -->|Iterasi Berjalan| PERIKSA
+    LANJUT -->|Iterasi Selesai| DUMP_DISC
 
-    CEK_PORT --> PORT_BAHAYA
-    PORT_BAHAYA -->|Ya| LEWAT3
-    PORT_BAHAYA -->|Tidak| PORT_WEB
-    LEWAT3 --> LANJUT
+    DUMP_DISC --> CEK_MODE_SCOPE
+    CEK_MODE_SCOPE -->|Ya| TERAPKAN_WL
+    CEK_MODE_SCOPE -->|Tidak| CEK_STRICT_MODE
+    CEK_STRICT_MODE -->|Ya| MODE_STRICT
+    CEK_STRICT_MODE -->|Tidak| TERAPKAN_OPEN
 
-    PORT_WEB -->|Ya| PENTING_WEB
-    PORT_WEB -->|Tidak| CEK_SETTING
-    PENTING_WEB --> CEK_SETTING
-
-    CEK_SETTING -->|Ya| PAKAI_MANUAL
-    CEK_SETTING -->|Tidak| CEK_LABEL
-    PAKAI_MANUAL --> CEK_NAMA
-    CEK_LABEL -->|Ya| PAKAI_LABEL
-    CEK_LABEL -->|Tidak| CEK_NAMA
-    PAKAI_LABEL --> CEK_NAMA
-
-    CEK_NAMA -->|Ya| PENTING_INFRA
-    CEK_NAMA -->|Tidak| MASUKKAN
-    PENTING_INFRA --> MASUKKAN
-    MASUKKAN --> LANJUT
-
-    LANJUT -->|Iterating| PERIKSA
-    LANJUT -->|Done| TULIS
-
-    TULIS --> CEK_WHITELIST
-    CEK_WHITELIST -->|Ya| WHITELIST
-    CEK_WHITELIST -->|Tidak| SEMUA
-    WHITELIST --> SELESAI
-    SEMUA --> SELESAI
+    TERAPKAN_WL --> SELESAI
+    MODE_STRICT --> SELESAI
+    TERAPKAN_OPEN --> SELESAI
 ```

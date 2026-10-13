@@ -1,87 +1,145 @@
-# Flowchart — Profiler.read_host_power() (Layer 1)
+# Flowchart — hardware_sensor.PowerSensor (Layer 1)
 
-> **Kode Sumber:** `framework/profiler.py` → class `EnvironmentProfiler`, fungsi `read_host_power()` (baris 172–215)
-> **Posisi di Diagram:** Layer 1 — Environment Profiler → RAPL/hwmon Sensor Reader
+> **Kode Sumber:** `framework/hardware_sensor.py` → class `PowerSensor`, fungsi `_detect_sensor()`, `_read_joules()`, dan `get_power_watts()` (baris 12–97)
+> **Posisi di Diagram:** Layer 1 — Environment Profiler → Hardware Power Sensor Detection & Acquisition
 > **Kategori:** 🛠️ TOOLS & INFRASTRUKTUR (S1)
 
-Sistem pembaca sensor energi tingkat silikon. Jika didukung oleh motherboard, metode ini memberikan data konsumsi daya absolut (True Power) dengan margin error <2%, jauh lebih akurat dibandingkan dengan Software Power Estimation.
+Modul pembaca sensor daya fisik tingkat motherboard/silikon. Mendeteksi register energi Intel RAPL (`/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj`) atau AMD Energy (`/sys/class/hwmon/*/energy1_input`). Dilengkapi perlindungan pembacaan baseline pertama dan unwrap register counter saat overflow (`max_energy_range_uj`). Jika tidak tersedia (misal di cloud VPS tanpa virtual RAPL), modul fallback dengan aman dan mengembalikan `None`.
 
 ```mermaid
 flowchart TD
-    START(["read_host_power()"])
+    START(["PowerSensor.__init__()"])
 
-    AVAILABLE{"hw_sensor_available<br/>== True?"}
-    NOT_AVAILABLE(["Return None<br/>(Trigger Software Model)"])
+    DETECT["_detect_sensor():<br/>Cari path register daya"]
 
-    TRY_RAPL["Coba Intel RAPL:<br/>Baca /sys/class/powercap/intel-rapl:0/energy_uj"]
-    RAPL_SUCCESS{"Berhasil?"}
+    CHECK_RAPL["1. Cek Intel RAPL:<br/>/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj<br/>(exists & os.access R_OK)"]
+    RAPL_FOUND{"RAPL ada &<br/>bisa dibaca?"}
+    SET_RAPL["sensor_path = rapl_path"]
 
-    CALC_RAPL["Hitung delta energy_uj dengan bacaan sebelumnya<br/>Konversi µJ ke Watt (Joule/s)"]
+    CHECK_HWMON["2. Cek AMD hwmon:<br/>Iterasi /sys/class/hwmon/*/energy1_input<br/>(exists & os.access R_OK)"]
+    HWMON_FOUND{"hwmon ada &<br/>bisa dibaca?"}
+    SET_HWMON["sensor_path = hwmon_path"]
+    NO_SENSOR["sensor_path = None"]
 
-    TRY_HWMON["Coba HWMON (AMD/Generic):<br/>Iterasi /sys/class/hwmon/hwmon*/power1_input"]
-    HWMON_SUCCESS{"Berhasil?"}
+    INIT_CHECK{"sensor_path<br/>!= None?"}
+    SET_AVAIL_TRUE["available = True<br/>Panggil _read_joules() untuk baseline reading"]
+    SET_AVAIL_FALSE["available = False<br/>Log warning fallback software model"]
 
-    CALC_HWMON["Konversi mikrowatt ke Watt"]
+    READ_START(["get_power_watts()"])
+    CHECK_ACTIVE{"available<br/>== True?"}
+    RETURN_NONE(["Return None<br/>(Trigger Software Linear Model di energy.py)"])
 
-    NO_SENSOR["Log Error: Sensor read failed"]
+    READ_JOULES["_read_joules():<br/>Buka sensor_path, baca microjoules<br/>joules = microjoules / 1,000,000.0<br/>now = time.time()"]
+    FIRST_READ{"last_joules<br/>is None?"}
+    SET_BASELINE["last_joules = joules<br/>last_time = now<br/>Return 0.0"]
 
-    RETURN_POWER(["Return host_power_watts"])
+    WRAP_CHECK{"joules &lt;<br/>last_joules?<br/>(Counter wrap-around)"}
+    UNWRAP["Baca max_energy_range_uj<br/>joules += max_range / 1,000,000.0"]
 
-    START --> AVAILABLE
-    AVAILABLE -->|Tidak| NOT_AVAILABLE
-    AVAILABLE -->|Ya| TRY_RAPL
+    CALC_DELTA["delta_j = joules - last_joules<br/>delta_t = now - last_time<br/>last_joules = joules, last_time = now"]
+    DELTA_TIME{"delta_t &gt; 0?"}
+    CALC_WATTS["watts = delta_j / delta_t"]
+    ZERO_WATTS["watts = 0.0"]
 
-    TRY_RAPL --> RAPL_SUCCESS
-    RAPL_SUCCESS -->|Ya| CALC_RAPL
-    RAPL_SUCCESS -->|Tidak| TRY_HWMON
+    READ_ERROR{"OSError /<br/>Exception?"}
+    HANDLE_ERR["Log error, set available = False<br/>Return 0.0"]
 
-    TRY_HWMON --> HWMON_SUCCESS
-    HWMON_SUCCESS -->|Ya| CALC_HWMON
-    HWMON_SUCCESS -->|Tidak| NO_SENSOR
+    RETURN_WATTS(["Return round(watts, 3) (Satuan: Watt)"])
 
-    CALC_RAPL --> RETURN_POWER
-    CALC_HWMON --> RETURN_POWER
-    NO_SENSOR --> NOT_AVAILABLE
+    START --> DETECT
+    DETECT --> CHECK_RAPL
+    CHECK_RAPL --> RAPL_FOUND
+    RAPL_FOUND -->|Ya| SET_RAPL
+    RAPL_FOUND -->|Tidak| CHECK_HWMON
+    CHECK_HWMON --> HWMON_FOUND
+    HWMON_FOUND -->|Ya| SET_HWMON
+    HWMON_FOUND -->|Tidak| NO_SENSOR
+
+    SET_RAPL --> INIT_CHECK
+    SET_HWMON --> INIT_CHECK
+    NO_SENSOR --> INIT_CHECK
+
+    INIT_CHECK -->|Ya| SET_AVAIL_TRUE
+    INIT_CHECK -->|Tidak| SET_AVAIL_FALSE
+
+    READ_START --> CHECK_ACTIVE
+    CHECK_ACTIVE -->|Tidak| RETURN_NONE
+    CHECK_ACTIVE -->|Ya| READ_JOULES
+
+    READ_JOULES --> READ_ERROR
+    READ_ERROR -->|Ya| HANDLE_ERR
+    HANDLE_ERR --> RETURN_NONE
+    READ_ERROR -->|Tidak| FIRST_READ
+
+    FIRST_READ -->|Ya| SET_BASELINE
+    SET_BASELINE --> RETURN_WATTS
+    FIRST_READ -->|Tidak| WRAP_CHECK
+
+    WRAP_CHECK -->|Ya| UNWRAP
+    WRAP_CHECK -->|Tidak| CALC_DELTA
+    UNWRAP --> CALC_DELTA
+
+    CALC_DELTA --> DELTA_TIME
+    DELTA_TIME -->|Ya| CALC_WATTS
+    DELTA_TIME -->|Tidak| ZERO_WATTS
+    CALC_WATTS --> RETURN_WATTS
+    ZERO_WATTS --> RETURN_WATTS
 ```
+
+---
 
 ## Alur Logika Konseptual
 
 ```mermaid
 flowchart TD
-    START(["START: Akuisisi Metrik Daya Host"])
+    START(["START: Inisialisasi & Pembacaan Daya Fisik Host"])
 
-    CEK_STATUS{"Apakah Sensor<br/>Power Aktif?"}
-    SELESAI_LEWAT(["END: Abort, Gunakan Software Model"])
+    subgraph DETEKSI["Fase Deteksi Sensor (Cold-Start)"]
+        CEK_INTEL["1. Pindai Driver Intel RAPL (/sys/class/powercap/intel-rapl)"]
+        KETEMU_INTEL{"Driver Intel<br/>Aktif?"}
+        PAKAI_INTEL["Pilih Jalur Intel (energy_uj)"]
 
-    subgraph INTEL["Jalur Intel RAPL"]
-        BACA_INTEL["Baca register energy_uj"]
-        STATUS_INTEL{"Apakah Pembacaan<br/>I/O Sukses?"}
-        HITUNG_INTEL["Konversi Microjoules → Watt (Δ / waktu)"]
+        CEK_AMD["2. Pindai Driver AMD/Generic (/sys/class/hwmon/*/energy1_input)"]
+        KETEMU_AMD{"Driver AMD<br/>Aktif?"}
+        PAKAI_AMD["Pilih Jalur AMD hwmon"]
+
+        TIDAK_ADA["Sensor Tidak Ditemukan / Lingkungan Cloud VPS Terisolasi"]
     end
 
-    subgraph AMD_GENERIC["Jalur HWMON (AMD / Universal)"]
-        BACA_AMD["Baca register power1_input"]
-        STATUS_AMD{"Apakah Pembacaan<br/>I/O Sukses?"}
-        HITUNG_AMD["Konversi Microwatts → Watt"]
+    subgraph AKUISISI["Fase Pembacaan Real-Time (get_power_watts)"]
+        BACA_ENERGY["Baca Nilai Microjoules Terkini dari Virtual File Kernel"]
+        CEK_PERTAMA{"Apakah Pembacaan Perdana?"}
+        SIMPAN_DASAR["Simpan sebagai Nilai Dasar (t_0) → Watt = 0.0"]
+
+        CEK_WRAP{"Apakah Nilai Counter Berkurang?<br/>(Register 32-bit/64-bit Overflow)"}
+        PULIHKAN_WRAP["Unwrap Counter dengan Konstanta max_energy_range_uj"]
+
+        HITUNG_WATT["Kalkulasi Daya Rata-Rata:<br/>Daya (Watt) = Δ Energi (Joule) ÷ Δ Waktu (detik)"]
     end
 
-    GAGAL["Hardware Error: Kembalikan None"]
+    SELESAI_NILAI(["END: Return Daya Aktual Host (Watt)"])
+    SELESAI_FALLBACK(["END: Return None → Aktifkan Software Power Model"])
 
-    SELESAI(["END: Return True Power (Watt)"])
+    START --> CEK_INTEL
+    CEK_INTEL --> KETEMU_INTEL
+    KETEMU_INTEL -->|Ya| PAKAI_INTEL
+    KETEMU_INTEL -->|Tidak| CEK_AMD
+    CEK_AMD --> KETEMU_AMD
+    KETEMU_AMD -->|Ya| PAKAI_AMD
+    KETEMU_AMD -->|Tidak| TIDAK_ADA
 
-    START --> CEK_STATUS
-    CEK_STATUS -->|Tidak| SELESAI_LEWAT
-    CEK_STATUS -->|Ya| BACA_INTEL
+    PAKAI_INTEL --> BACA_ENERGY
+    PAKAI_AMD --> BACA_ENERGY
+    TIDAK_ADA --> SELESAI_FALLBACK
 
-    BACA_INTEL --> STATUS_INTEL
-    STATUS_INTEL -->|Ya| HITUNG_INTEL
-    STATUS_INTEL -->|Tidak| BACA_AMD
+    BACA_ENERGY --> CEK_PERTAMA
+    CEK_PERTAMA -->|Ya| SIMPAN_DASAR
+    SIMPAN_DASAR --> SELESAI_NILAI
+    CEK_PERTAMA -->|Tidak| CEK_WRAP
 
-    BACA_AMD --> STATUS_AMD
-    STATUS_AMD -->|Ya| HITUNG_AMD
-    STATUS_AMD -->|Tidak| GAGAL
+    CEK_WRAP -->|Ya| PULIHKAN_WRAP
+    CEK_WRAP -->|Tidak| HITUNG_WATT
+    PULIHKAN_WRAP --> HITUNG_WATT
 
-    HITUNG_INTEL --> SELESAI
-    HITUNG_AMD --> SELESAI
-    GAGAL --> SELESAI_LEWAT
+    HITUNG_WATT --> SELESAI_NILAI
 ```

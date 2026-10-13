@@ -103,14 +103,22 @@ Runs at cold start to build a complete hardware and environment profile of the h
 - **Host `/proc` Mount Verification:** cross-checks `/proc/cpuinfo` CPU count
   against `os.cpu_count()` to confirm the host's `/proc` is mounted (not the
   container's own). Requires `pid: host` in `docker-compose.yml`.
+- **Critical Port Auto-Exclusion & Auto-Priority:**
+  - `CRITICAL_PORTS_EXCLUDE`: containers binding database ports (3306, 5432, 6379, 27017,
+    27018, 5984, 9200, 9300, 5672, 15672, 2181), container runtime/orchestration (2376, 2377),
+    SSH (22, 2222, 2206), or VPN (1194, 51820, 500) are automatically excluded at runtime to prevent
+    data corruption or lockout.
+  - `CRITICAL_PORTS_PRIORITY`: containers binding web/DNS ports (80, 443, 8080, 8443, 53, 123)
+    are automatically tagged `priority=True` (shielded from hard CPU/RAM caps).
 - **Network-Infra Auto-Priority:** auto-detects containers matching known
-  proxy/DNS image patterns (`nginx`, `caddy`, `traefik`, `cloudflared`, `coredns`)
+  proxy/DNS/tunnel image patterns (`nginx`, `caddy`, `traefik`, `cloudflared`, `coredns`, `haproxy`, `envoy`, `tailscale`, `tailscaled`)
   and forces `priority=True` to prevent freezing/throttling network infrastructure.
 - **`nf_conntrack_max` Pre-flight:** reads `/proc/sys/net/netfilter/nf_conntrack_max`
   and warns if below `65536`. Extends the TCP Backlog Verification pattern.
-- **Expanded Exclusion List:** `EXCLUDED_CONTAINERS` in `config.py` enumerates all
-  known critical infrastructure, tunnel, database, and monitoring containers by name
-  as a hard safety-net, independent of the whitelist mode.
+- **Universal Exclusion List & Strict Mode:** `EXCLUDED_CONTAINERS` in `config.py` enumerates
+  HECF services and network/VPN tunnels (`hecf`, `hecf-dashboard`, `cloudflared`, `cloudflared-tunnel`, `tailscale`, `tailscaled`, `wireguard`)
+  by name as an inviolable baseline, while critical databases/SSH/orchestration are caught dynamically by `CRITICAL_PORTS_EXCLUDE`.
+  `STRICT_WHITELIST_MODE` allows requiring an explicit non-empty whitelist.
 
 #### Layer 2: Monitoring Engine (`framework/monitor.py`)
 
@@ -120,15 +128,16 @@ bypassing the Docker REST API to minimize monitoring overhead:
 - CPU: `/sys/fs/cgroup/<container>/cpu.stat`
 - Memory: `/sys/fs/cgroup/<container>/memory.stat` (computes `actual = memory.current
   - inactive_file` to exclude reclaimable page-cache from RAM measurement).
+- **Read Retry & Stale Detection:** retries cgroupfs read once after 100ms
+  (`MONITOR_RETRY_COUNT=1`, `MONITOR_RETRY_DELAY_MS=100`). If still failing, returns a
+  stale marker (`stale: True`) so the control loop safely skips shaping rather than acting
+  on corrupted data or terminated containers.
 
 **Adaptive Sampling (proposal §3.2.3):**
 
-- If CPU utilization at `t-1` **> 60%**, or any container is escalated (Guardrail/Aggressive) → poll every **10 seconds**
+- If CPU utilization at `t-1` **≥ 60%**, or any container is in an escalated state
+  (`GUARDRAIL`, `AGGRESSIVE`, `BALANCED`, or `EDOS_FREEZE`) → poll every **10 seconds**
 - Otherwise → poll every **30 seconds**
-
-**Event-Driven Idle Detection:** Micro-Freezing idle state is detected via
-`cgroup.events` `populated 0` signal (kernel notification when no active processes
-remain), replacing polling-based `cpu_percent < 1.0` to eliminate false-idle/active.
 
 Target: all monitoring overhead combined must stay within the global **<5%**
 framework overhead budget (measured by the Overhead Tracker, §4).
@@ -139,10 +148,13 @@ The centralized decision layer combining reactive, analytic, and proactive contr
 
 - **3A. Real-time Guardrail (`framework/guardrail.py`)** — *reactive*
   - Rolling boolean array of the last **5** samples.
-  - Triggers emergency intervention (hard CPU cap) if **CPU > 80% OR RAM > 90%**
+  - Triggers emergency intervention (hard CPU cap) if **CPU > effective threshold OR RAM > 90%**
     in **at least 3 of the last 5** samples.
   - The 3-of-5 rule avoids false positives on harmless micro-spikes while still
     reacting before OOM.
+  - **EMA Pre-Warning Margin:** If the EMA prediction trend is approaching the limit
+    (`EMA ≥ 75.0%`, from `GUARDRAIL_CPU_THRESHOLD - PRE_WARNING_MARGIN 5.0%`), the effective
+    CPU threshold automatically lowers to 75.0% for early alertness.
   - **Derivative Pre-emptive Trigger:** If the EMA prediction trend is rising fast
     (`d(EMA)/dt > 5.0` CPU-points per sample) AND `EMA > 50%`, Guardrail triggers *before* CPU
     hits the 80% threshold. (Proactive Throttling Pipeline)
@@ -153,6 +165,7 @@ The centralized decision layer combining reactive, analytic, and proactive contr
 
 - **3B. Tier Detector (`framework/tier_detector.py`)** — *analytic*
   - **Single-Window Architecture:** one sliding window of `TIER_WINDOW` = 120 samples per container.
+  - **Cold-Start Fallback:** for the first `COLD_START_SAMPLES = 10` samples, forces **Tier 2 (Balanced)**.
   - Computes `spike_ratio = P95 / P50` of CPU utilization via `numpy.percentile()`.
 
   | Tier | Label | Condition |
@@ -172,19 +185,31 @@ The centralized decision layer combining reactive, analytic, and proactive contr
   - O(1) time and memory per update.
   - Provides the `d(EMA)/dt` derivative signal to the Guardrail for pre-emptive throttling.
 
+- **Mode Decision & Pre-emptive Scale-Up (`framework/main.py`):**
+  - In `full_hecf` mode, after checking Guardrail, if `spike_ratio > 1.5`, HECF triggers
+    **`PREEMPTIVE_SCALEUP`** with unlimited quota (`quota = -1`), releasing constraints
+    so sudden traffic storms are handled without SLA breach.
+  - If `spike_ratio ≤ 1.5`, tier shaping (`AGGRESSIVE` / `BALANCED` / `SOFT`) is applied.
+
 #### Layer 4: Adaptive Resource Shaping (`framework/shaper.py`)
 
 Translates Layer 3 decisions into real Docker/cgroups v2 parameter writes:
-`cpu.max`, `memory.max`, `memory.swap.max`.
+`cpu.max`, `memory.max`, `memory.high`, `memory.swap.max`.
 
 Respects Layer 1's priority tagging: non-priority containers are throttled first
 and more aggressively; priority containers are shielded from hard caps.
 
+- **CPU Minimum Floor:** enforces a safety floor of 0.2 Core (`quota ≥ 20000 µs` with period 100000 µs)
+  so a throttled container never drops to zero CPU or starves.
+- **Read-Back Validation:** reads back `cpu.max` after writing to verify kernel acceptance,
+  retrying once if a mismatch occurs.
+
 | Tier | Condition | Shaping behavior |
 | --- | --- | --- |
-| 1 – Aggressive | `spike_ratio > 2.0` | Hard CPU cap; non-priority containers throttled first |
-| 2 – Balanced | `1.5 ≤ spike_ratio ≤ 2.0` | Soft CPU cap; burst control with adaptive limit |
-| 3 – Soft | `spike_ratio < 1.5` | Minimal intervention; passive monitoring only |
+| 1 – Aggressive | `spike_ratio > 2.0` (or committed Tier 1) | Hard CPU cap (0.8 core); memory capped at 80% host RAM (non-priority) |
+| 2 – Balanced | `1.5 ≤ spike_ratio ≤ 2.0` (or committed Tier 2) | Soft CPU cap (0.9 core); no memory cap |
+| 3 – Soft | `spike_ratio < 1.5` | Minimal intervention; unlimited CPU |
+| Pre-emptive Scale-Up | `spike_ratio > 1.5` (under normal Guardrail) | Quota removed (unlimited) to absorb sudden spike |
 
 **Micro-Freezing (`framework/security/micro_freezer.py`):**
 Extends Layer 4 shaping with a sub-second, zero-CPU idle mechanism:
@@ -192,15 +217,18 @@ Extends Layer 4 shaping with a sub-second, zero-CPU idle mechanism:
 - When a `non-priority` container has had no inbound activity for **≥0.8 seconds**,
   Layer 4 writes `1` to `cgroup.freeze`, dropping CPU usage to exactly **0%** while
   keeping the container fully resident in memory (no cold-start penalty).
+- **Event-Driven Idle Detection:** Micro-Freezing idle state is detected via
+  `cgroup.events` `populated 0` signal (kernel notification when no active processes
+  remain in the cgroup), replacing polling-based `cpu_percent < 1.0` to eliminate false-idle/active during inter-poll gaps.
 - **Active Memory Reclaim:** Upon freezing, HECF triggers `memory.reclaim` (kernel ≥ 6.1) to proactively free page cache, reducing the frozen container's RAM footprint.
 - On the next inbound request, `cgroup.freeze = 0` is written, thawing the container
   in **under 1ms**.
-- Hard freeze-duration cap: **500–1000ms** maximum per cycle (see §5 for why this
+- Hard freeze-duration cap: **1000ms** maximum per cycle (see §5 for why this
   requires cgroups v2 specifically).
 - **TCP Backlog Buffering:** while a container is frozen, new inbound packets queue
   in the host's TCP backlog (`net.core.somaxconn`) rather than being dropped. At
   cold start, `framework/security/tcp_backlog_manager.py` inspects the host's
-  `somaxconn` value to confirm sufficient headroom for the expected freeze window.
+  `somaxconn` value to confirm sufficient headroom for the expected freeze window (default min headroom 4096).
   Extended to also verify app-level listen backlog via `/proc/<pid>/net/tcp`.
 - **zram-as-swap + `memory.swap.max`:** verifies zram-backed swap at cold start;
   sets `memory.swap.max` accordingly (compressed swap if zram present, 0 otherwise)
@@ -254,9 +282,9 @@ P_idle = cpu_count × 3.75W
 P_max  = cpu_count × 13.5W
 ```
 
-This scales automatically: a 4-core machine produces 15W/54W (matching the
-entry-level server class in proposal §3.5.1); a 2-core edge device produces
-7.5W/27W; a 16-core server produces 60W/216W.
+**Frozen Container Power Handling:** When a container is micro-frozen (`is_frozen=True`),
+the estimator returns `p_idle` as the container baseline footprint, avoiding zero-value anomalies
+that can disrupt dataset processing in environments without physical power sensors.
 
 **Output units:** Joule and kWh only. **No carbon/CO2e conversion of any kind.**
 This was explicitly removed from scope (proposal §1.6).
@@ -282,9 +310,9 @@ experiment design (see §7):
 
 #### Metrics Dashboard (`dashboard.py`)
 
-Independent **Gunicorn/Flask** server (port 8092), using 2 workers × 4 threads to
-handle concurrent browser requests without blocking — preventing HTTP 524 gateway
-timeouts under load. Ingests `metrics.csv` generated by the HECF core loop.
+Independent **Gunicorn/Flask** server (port 8092), configured with 1 worker × 2 threads
+to deliver lightweight, responsive concurrency without unnecessary memory overhead.
+Ingests `metrics.csv` generated by the HECF core loop (reading the last ~200 rows with tail-read).
 
 Visualizes **exactly 5 metrics**: CPU Utilization, Memory/RAM Usage, Energy
 Consumption, Web Latency (SLA), Framework Overhead. No historical database —

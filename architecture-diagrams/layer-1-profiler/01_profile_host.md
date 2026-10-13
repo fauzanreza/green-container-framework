@@ -1,10 +1,10 @@
-# Flowchart — Profiler.profile_host() (Layer 1)
+# Flowchart — profiler.profile_host() (Layer 1)
 
-> **Kode Sumber:** `framework/profiler.py` → class `EnvironmentProfiler`, fungsi `profile_host()` (baris 35–88)
+> **Kode Sumber:** `framework/profiler.py` → fungsi `profile_host()` (baris 20–91)
 > **Posisi di Diagram:** Layer 1 — Environment Profiler → Host Detection
 > **Kategori:** 🛠️ TOOLS & INFRASTRUKTUR (S1)
 
-Sistem profilasi otomatis. Menghindari hardcoding parameter. Mendeteksi topologi CPU dan memori secara dinamis agar model estimasi energi bisa melakukan self-calibration sesuai server tempat HECF dijalankan (mendukung portabilitas).
+Sistem profilasi otomatis host saat cold-start. Membaca topologi CPU dan memori secara dinamis dari `/proc`, menginisialisasi modul sensor perangkat keras (`hardware_sensor.PowerSensor`), memverifikasi namespace host (`pid: host`), dan melakukan pre-flight check batas `nf_conntrack_max`.
 
 ```mermaid
 flowchart TD
@@ -12,30 +12,28 @@ flowchart TD
 
     CPU_TRY["Deteksi Core:<br/>baca /proc/cpuinfo<br/>(hitung baris 'processor')"]
     CPU_ERR{"I/O Error?"}
-    CPU_FALLBACK["Fallback:<br/>os.cpu_count()"]
-    CPU_OK["Simpan host_cores"]
+    CPU_FALLBACK["Fallback:<br/>os.cpu_count() atau 1"]
+    CPU_OK["Simpan cpu_count"]
 
     RAM_TRY["Deteksi RAM:<br/>baca MemTotal dari /proc/meminfo"]
-    RAM_OK["Simpan host_ram"]
+    RAM_OK["mem_total_mb = mem_total_kb // 1024"]
 
-    ENERGY_CONST["Set konstanta linear power model:<br/>p_idle = core_count × 3.75W<br/>p_max = core_count × 13.5W"]
+    ENERGY_CONST["Hitung konstanta linear power model:<br/>p_idle_watts = round(cpu_count × 3.75, 1)<br/>p_max_watts = round(cpu_count × 13.5, 1)"]
 
-    RAPL_CHECK["Deteksi Hardware Sensor:<br/>cek /sys/class/powercap/intel-rapl"]
-    RAPL_FOUND{"Sensor ada?"}
-    RAPL_YES["Set hw_sensor_available = True"]
-    RAPL_NO["Set hw_sensor_available = False"]
+    SENSOR_INIT["Inisialisasi Hardware Power Sensor:<br/>hw_sensor = PowerSensor()"]
 
-    NS_CHECK["Validasi Namespace:<br/>cross-check os.cpu_count()<br/>vs /proc/cpuinfo count"]
-    NS_MATCH{"Match?"}
-    NS_WARN["Log Critical: /proc MISMATCH!<br/>pid:host mungkin tidak di-set"]
+    NS_CHECK["Verifikasi Mount /proc Host:<br/>os_cpu = os.cpu_count() or 1<br/>cross-check cpu_count == os_cpu"]
+    NS_MATCH{"cpu_count ==<br/>os_cpu?"}
+    NS_WARN["Log Critical: /proc MISMATCH!<br/>Pastikan 'pid: host' di docker-compose"]
     NS_OK["Log Info: /proc verification PASSED"]
 
-    NET_CHECK["Deteksi Batas Netfilter:<br/>baca /proc/sys/net/netfilter/nf_conntrack_max"]
-    NET_WARN{"nf_conntrack_max<br/>< 65536?"}
-    WARN_LOG["Log Warning: Risiko packet drop<br/>(CONNTRACK_MIN=65536)"]
-    NET_OK["Log Info: Conntrack OK (≥ 65536)"]
+    NET_CHECK["Pre-flight nf_conntrack_max:<br/>baca /proc/sys/net/netfilter/nf_conntrack_max"]
+    NET_WARN{"conntrack_max<br/>&lt; 65536 (CONNTRACK_MIN)?"}
+    WARN_LOG["Log Warning: Risiko packet drop<br/>sysctl -w net.netfilter.nf_conntrack_max=65536"]
+    NET_OK["Log Info: nf_conntrack_max check PASSED"]
+    NET_SKIP["OSError: conntrack tidak terbaca (skip)"]
 
-    RETURN(["Return dict(host_cores, host_ram, dll)"])
+    RETURN(["Return dict(<br/>hostname, cpu_count, mem_total_mb,<br/>p_idle_watts, p_max_watts, hw_sensor)"])
 
     START --> CPU_TRY
     CPU_TRY --> CPU_ERR
@@ -45,12 +43,8 @@ flowchart TD
     CPU_OK --> RAM_TRY
     RAM_TRY --> RAM_OK
     RAM_OK --> ENERGY_CONST
-    ENERGY_CONST --> RAPL_CHECK
-    RAPL_CHECK --> RAPL_FOUND
-    RAPL_FOUND -->|Ya| RAPL_YES
-    RAPL_FOUND -->|Tidak| RAPL_NO
-    RAPL_YES --> NS_CHECK
-    RAPL_NO --> NS_CHECK
+    ENERGY_CONST --> SENSOR_INIT
+    SENSOR_INIT --> NS_CHECK
     NS_CHECK --> NS_MATCH
     NS_MATCH -->|Tidak| NS_WARN
     NS_MATCH -->|Ya| NS_OK
@@ -59,9 +53,13 @@ flowchart TD
     NET_CHECK --> NET_WARN
     NET_WARN -->|Ya| WARN_LOG
     NET_WARN -->|Tidak| NET_OK
+    NET_CHECK -.->|OSError| NET_SKIP
     WARN_LOG --> RETURN
     NET_OK --> RETURN
+    NET_SKIP --> RETURN
 ```
+
+---
 
 ## Alur Logika Konseptual
 
@@ -69,32 +67,29 @@ flowchart TD
 flowchart TD
     START(["Host Profiling (Cold-Start)"])
 
-    CEK_CPU["Deteksi Topologi CPU (Logical Processors)"]
+    CEK_CPU["Deteksi Topologi CPU (Logical Cores) via /proc/cpuinfo"]
     CPU_GAGAL{"Eksekusi<br/>Gagal?"}
-    CPU_CADANGAN["Fallback: API OS (os.cpu_count)"]
+    CPU_CADANGAN["Fallback: os.cpu_count()"]
     CPU_DAPAT["Host Cores terverifikasi"]
 
-    CEK_RAM["Deteksi Kapasitas RAM"]
-    RAM_DAPAT["Host RAM terverifikasi"]
+    CEK_RAM["Deteksi Kapasitas RAM via /proc/meminfo"]
+    RAM_DAPAT["Host RAM terverifikasi (MB)"]
 
     HITUNG_DAYA["Kalkulasi Konstanta Estimasi Daya:<br/>• Baseline (P_idle) = cores × 3.75W<br/>• Max (P_max) = cores × 13.5W"]
 
-    CEK_SENSOR["Deteksi Hardware Sensor (RAPL/hwmon)"]
-    SENSOR_ADA{"Sensor<br/>Tersedia?"}
-    SENSOR_YA["✅ Mode Hardware-True"]
-    SENSOR_TIDAK["⚠ Fallback: Software Estimation"]
+    CEK_SENSOR["Inisialisasi PowerSensor (RAPL/hwmon)"]
 
-    CEK_ASLI["Verifikasi Namespace:<br/>cross-check os.cpu_count() vs /proc/cpuinfo"]
+    CEK_ASLI["Verifikasi Host /proc Namespace:<br/>cross-check os.cpu_count() vs /proc/cpuinfo"]
     ASLI{"Jumlah Core<br/>Match?"}
     ASLI_OK["✅ /proc Verification PASSED"]
-    ASLI_GAGAL["⚠ Log Critical: /proc MISMATCH<br/>(pid:host belum di-set)"]]
+    ASLI_GAGAL["⚠ Log Critical: /proc MISMATCH<br/>(periksa konfigurasi pid: host)"]
 
-    CEK_JARINGAN["Verifikasi nf_conntrack_max<br/>(threshold: 65536)"]
+    CEK_JARINGAN["Verifikasi Pre-flight nf_conntrack_max<br/>(threshold: 65536)"]
     JARINGAN{"nf_conntrack_max<br/>≥ 65536?"}
     JARINGAN_OK["✅ Conntrack OK"]
-    JARINGAN_WARN["⚠ Peringatan: Risiko packet drop"]
+    JARINGAN_WARN["⚠ Peringatan: Risiko connection drop"]
 
-    SELESAI(["Profil Host Terbentuk (Ready)"])
+    SELESAI(["Profil Host Terbentuk (Siap Digunakan)"])
 
     START --> CEK_CPU
     CEK_CPU --> CPU_GAGAL
@@ -105,11 +100,7 @@ flowchart TD
     CEK_RAM --> RAM_DAPAT
     RAM_DAPAT --> HITUNG_DAYA
     HITUNG_DAYA --> CEK_SENSOR
-    CEK_SENSOR --> SENSOR_ADA
-    SENSOR_ADA -->|Ya| SENSOR_YA
-    SENSOR_ADA -->|Tidak| SENSOR_TIDAK
-    SENSOR_YA --> CEK_ASLI
-    SENSOR_TIDAK --> CEK_ASLI
+    CEK_SENSOR --> CEK_ASLI
     CEK_ASLI --> ASLI
     ASLI -->|Ya| ASLI_OK
     ASLI -->|Tidak| ASLI_GAGAL

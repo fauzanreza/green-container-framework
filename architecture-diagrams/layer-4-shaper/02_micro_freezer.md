@@ -1,94 +1,97 @@
 # Flowchart — MicroFreezer.evaluate() (Layer 4)
 
-> **Kode Sumber:** `framework/security/micro_freezer.py` → class `MicroFreezer`, fungsi `evaluate()` (baris 78–145) dan `record_activity()` (baris 62–76)
-> **Posisi di Diagram:** Layer 4 — Adaptive Resource Shaping → 4B Micro-Freezer
+> **Kode Sumber:** `framework/security/micro_freezer.py` → class `MicroFreezer`, fungsi `evaluate()`, `record_activity()`, `_freeze()`, dan `_thaw()` (baris 37–274)
+> **Posisi di Diagram:** Layer 4 — Adaptive Resource Shaping → 4B Sub-second Micro-Freezing & Zero-CPU Idle Engine
 > **Kategori:** 🌟 INOVASI ALGORITMA (S2)
 
-Algoritma pembekuan container tingkat milidetik (`cgroup.freeze`). Dioptimasi untuk mereduksi konsumsi CPU idle ke absolute 0% tanpa memutus koneksi TCP. Menggunakan eBPF untuk mendeteksi transaksi yang sedang berjalan (Safety Gate) dan `cgroup.events` untuk deteksi idle. Terintegrasi dengan **Active Memory Reclaim** (`memory.reclaim`) untuk membebaskan page cache saat idle.
+Algoritma pembekuan kontainer berbasis kernel Linux cgroups v2 (`cgroup.freeze`). Mengurangi utilisasi CPU kontainer yang menganggur ke **persis 0.0% CPU** tanpa terminasi proses atau degradasi *cold-start delay*.
+- **Pendeteksian Idle Hybrid:** Mengutamakan sinyal event kernel Linux unified hierarchy (`cgroup.events` kolom `populated == 0`) dipadukan dengan jeda tenang minimum `MICRO_FREEZE_IDLE_TRIGGER_S = 0.8s`.
+- **Safety Gate (eBPF / Netlink Transaksi):** Memeriksa apakah ada transaksi database atau koneksi aktif yang belum terselesaikan (`ebpf_sensor.has_open_connections()`) sebelum pembekuan dieksekusi.
+- **Batas Siklus Beku Maksimal (Hard Timeout):** Maksimal durasi beku dibatasi `MICRO_FREEZE_MAX_DURATION_MS = 1000ms`. Bila terlewati, mekanisme *Force-Thaw* langsung diaktifkan untuk menjaga SLA jaringan.
+- **Pencairan Sub-Milidetik:** Menulis `cgroup.freeze = 0` mencairkan kontainer dalam waktu <1ms saat request baru tiba (`record_activity`).
+- **Active Memory Reclaim (`memory.reclaim`):** Pada `main.py`, pembekuan kontainer langsung memicu pembersihan cache halaman RAM tak terpakai.
+- **Akumulasi Telemetri:** Durasi beku diakumulasikan (`get_cumulative_freeze_seconds`) dan dicatat ke kolom ke-16 `metrics.csv`.
 
 ```mermaid
 flowchart TD
-    START(["evaluate(container_name, container_id, priority, cpu_percent)"])
+    START(["MicroFreezer.evaluate(name, id, priority, cpu)"])
 
-    IS_PRIORITY{"priority<br/>== True?"}
+    CHECK_PRIO{"priority == True?<br/>(Database / Infra)"}
     EXEMPT(["Return {action: 'none',<br/>reason: 'priority_exempt'}"])
 
-    FIRST_SEEN{"container_id<br/>in state?"}
-    INIT_STATE["Init state[container_id]:<br/>frozen=False, frozen_at=0.0<br/>last_activity=now"]
+    CHECK_FIRST{"container_id in<br/>_state tracking?"}
+    INIT_STATE["_state[id] = {frozen: False, frozen_at: 0.0, last_activity: now}"]
     FIRST_RET(["Return {action: 'none',<br/>reason: 'first_seen'}"])
 
-    IS_FROZEN{"state['frozen']<br/>== True?"}
+    CHECK_CURRENT_FROZEN{"_state[id]['frozen']<br/>== True?"}
 
-    CALC_DURATION["frozen_duration_ms = (now - frozen_at) × 1000"]
-    DURATION_EXCEEDED{"frozen_duration_ms<br/>≥ max_freeze_ms?"}
-    FORCE_THAW["Force Thaw: _thaw(id, reason='max_duration')<br/>Catat cumulative_freeze_s<br/>state.frozen = False"]
+    CALC_FROZEN_MS["frozen_duration_ms = (now - frozen_at) × 1000"]
+    CHECK_MAX_DURATION{"frozen_duration_ms ≥ 1000ms<br/>(max_freeze_duration_ms)?"}
+    DO_FORCE_THAW["_thaw(id, reason='max_duration_reached'):<br/>Akumulasi durasi ke _cumulative_freeze_seconds<br/>Tulis '0' ke cgroup.freeze<br/>state['frozen'] = False"]
+    RETURN_THAW(["Return {action: 'thaw',<br/>reason: 'max_duration:...ms'}"])
     STILL_FROZEN(["Return {action: 'none',<br/>reason: 'already_frozen'}"])
 
-    CALC_IDLE["idle_duration = now - state.last_activity"]
+    CALC_IDLE["idle_duration = now - state['last_activity']"]
 
-    POPULATED_AVAIL{"_check_populated(id)<br/>returns value?"}
-    KERNEL_ACTIVE{"populated<br/>== True?"}
-    NOT_IDLE["Return {action: 'none',<br/>reason: 'populated_active'}"]
-    KERNEL_IDLE{"idle_duration<br/>≥ 0.8s (idle_trigger)?"}
-    TOO_RECENT1(["Return {action: 'none',<br/>reason: 'depopulated_but_too_recent'}"])
-    
-    FALLBACK_CHECK{"idle_duration<br/>≥ 0.8s (idle_trigger)?"}
-    TOO_RECENT2(["Return {action: 'none',<br/>reason: 'not_idle_enough'}"])
+    CHECK_EVENTS["_check_populated(id):<br/>Baca file cgroup.events"]
+    POPULATED_FOUND{"cgroup.events<br/>tersedia?"}
 
-    EBPF_CHECK{"ebpf_sensor.has_open_connections(id)?"}
-    DEFER(["Return {action: 'defer',<br/>reason: 'open_connections'}"])
+    KERNEL_ACTIVE{"populated == 1?<br/>(Kernel: proses aktif)"}
+    ABORT_POPULATED["Return {action: 'none',<br/>reason: 'populated_active'}"]
 
-    FIND_PATH["Resolusi cgroup.freeze path"]
+    KERNEL_IDLE{"idle_duration ≥ 0.8s<br/>(MICRO_FREEZE_IDLE_TRIGGER_S)?"}
+    ABORT_TOO_RECENT_1["Return {action: 'none',<br/>reason: 'depopulated_but_too_recent'}"]
 
-    IS_DRY{"dry_run?"}
-    DRY_LOG["Log '[DRY-RUN] Would FREEZE...'"]
-    WRITE_FREEZE["Tulis '1' ke cgroup.freeze<br/>via _freeze(name, id)<br/>Trigger memory.reclaim"]
-    UPDATE_STATE["Update state[id]:<br/>frozen=True, frozen_at=now"]
-    FREEZE_RET(["Return {action: 'freeze',<br/>reason: 'idle:{duration}s'}"])
+    FALLBACK_IDLE{"idle_duration ≥ 0.8s<br/>(Fallback Polling)?"}
+    ABORT_TOO_RECENT_2["Return {action: 'none',<br/>reason: 'not_idle_enough'}"]
 
-    START --> IS_PRIORITY
-    IS_PRIORITY -->|Ya| EXEMPT
-    IS_PRIORITY -->|Tidak| FIRST_SEEN
-    FIRST_SEEN -->|Ya| INIT_STATE
+    CHECK_SAFETY{"ebpf_sensor != None DAN<br/>ebpf_sensor.has_open_connections(id)?"}
+    DEFER_FREEZE(["Return {action: 'defer',<br/>reason: 'open_connections'}<br/>Tunda beku agar transaksi DB aman"])
+
+    CHECK_DRY{"dry_run == True?"}
+    DRY_FREEZE["Log [DRY-RUN] Would FREEZE"]
+    REAL_FREEZE["_freeze(name, id):<br/>Tulis '1' ke cgroup.freeze"]
+
+    UPDATE_FROZEN["_state[id]['frozen'] = True<br/>_state[id]['frozen_at'] = now"]
+    RETURN_FREEZE(["Return {action: 'freeze',<br/>reason: 'idle:...s'}<br/><i>Di main.py: memicu reclaim_memory()</i>"])
+
+    START --> CHECK_PRIO
+    CHECK_PRIO -->|Ya| EXEMPT
+    CHECK_PRIO -->|Tidak| CHECK_FIRST
+
+    CHECK_FIRST -->|Tidak| INIT_STATE
     INIT_STATE --> FIRST_RET
-    FIRST_SEEN -->|Tidak| IS_FROZEN
+    CHECK_FIRST -->|Ya| CHECK_CURRENT_FROZEN
 
-    IS_FROZEN -->|Ya| CALC_DURATION
-    CALC_DURATION --> DURATION_EXCEEDED
-    DURATION_EXCEEDED -->|"Ya (≥ 1000ms)"| FORCE_THAW
-    DURATION_EXCEEDED -->|Tidak| STILL_FROZEN
+    CHECK_CURRENT_FROZEN -->|Ya| CALC_FROZEN_MS
+    CALC_FROZEN_MS --> CHECK_MAX_DURATION
+    CHECK_MAX_DURATION -->|Ya| DO_FORCE_THAW
+    DO_FORCE_THAW --> RETURN_THAW
+    CHECK_MAX_DURATION -->|Tidak| STILL_FROZEN
 
-    IS_FROZEN -->|Tidak| CALC_IDLE
-    CALC_IDLE --> POPULATED_AVAIL
+    CHECK_CURRENT_FROZEN -->|Tidak| CALC_IDLE
+    CALC_IDLE --> CHECK_EVENTS
+    CHECK_EVENTS --> POPULATED_FOUND
 
-    POPULATED_AVAIL -->|Ya| KERNEL_ACTIVE
-    KERNEL_ACTIVE -->|"Ya"| NOT_IDLE
-    KERNEL_ACTIVE -->|"Tidak"| KERNEL_IDLE
-    KERNEL_IDLE -->|"Tidak (< 0.8s)"| TOO_RECENT1
-    KERNEL_IDLE -->|"Ya (≥ 0.8s)"| EBPF_CHECK
+    POPULATED_FOUND -->|Ya| KERNEL_ACTIVE
+    KERNEL_ACTIVE -->|Ya| ABORT_POPULATED
+    KERNEL_ACTIVE -->|Tidak| KERNEL_IDLE
+    KERNEL_IDLE -->|Tidak| ABORT_TOO_RECENT_1
+    KERNEL_IDLE -->|Ya| CHECK_SAFETY
 
-    POPULATED_AVAIL -->|Tidak| FALLBACK_CHECK
-    FALLBACK_CHECK -->|"Tidak (< 0.8s)"| TOO_RECENT2
-    FALLBACK_CHECK -->|"Ya (≥ 0.8s)"| EBPF_CHECK
+    POPULATED_FOUND -->|Tidak| FALLBACK_IDLE
+    FALLBACK_IDLE -->|Tidak| ABORT_TOO_RECENT_2
+    FALLBACK_IDLE -->|Ya| CHECK_SAFETY
 
-    EBPF_CHECK -->|Ya| DEFER
-    EBPF_CHECK -->|Tidak| FIND_PATH
+    CHECK_SAFETY -->|Ya| DEFER_FREEZE
+    CHECK_SAFETY -->|Tidak| CHECK_DRY
 
-    FIND_PATH --> IS_DRY
-    IS_DRY -->|Ya| DRY_LOG
-    IS_DRY -->|Tidak| WRITE_FREEZE
-    DRY_LOG --> UPDATE_STATE
-    WRITE_FREEZE --> UPDATE_STATE
-    UPDATE_STATE --> FREEZE_RET
+    CHECK_DRY -->|Ya| DRY_FREEZE
+    CHECK_DRY -->|Tidak| REAL_FREEZE
+    DRY_FREEZE --> UPDATE_FROZEN
+    REAL_FREEZE --> UPDATE_FROZEN
+    UPDATE_FROZEN --> RETURN_FREEZE
 ```
-
-## Mengapa Ini Inovasi S2?
-
-1. **Event-Driven vs Polling:** Idle detection menggunakan sinyal kernel (`cgroup.events populated=0`) — bukan polling CPU%. Ini menghilangkan false-idle dan false-active antar interval sampling. Waktu tunggu ditekan menjadi 0.8s untuk memaksimalkan capture state idle.
-2. **Literal 0% CPU:** Tidak ada teknik cgroups throttling yang bisa mencapai 0% CPU. Hanya `cgroup.freeze` yang bisa — dan ini eksklusif cgroups v2.
-3. **Active Memory Reclaim:** Tidak hanya menghemat CPU, pembekuan otomatis memicu `memory.reclaim` (kernel ≥ 6.1) untuk menekan footprint RAM container yang sedang idle tanpa membunuhnya.
-4. **Safety Gate (eBPF):** Sebelum freeze, mengecek apakah ada transaksi database yang belum selesai. Mencegah data corruption.
-5. **Hard Duration Cap:** Freeze dibatasi 500–1000ms per siklus. Dikombinasikan dengan TCP Backlog buffering (lihat flowchart berikutnya). Durasi freeze ini diakumulasikan dan dilacak per container untuk perhitungan energi.
 
 ---
 
@@ -96,87 +99,74 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    START(["START: Evaluasi Micro-Freeze"])
+    START(["START: Evaluasi Keputusan Pembekuan (Micro-Freezing)"])
 
-    PENTING{"Apakah Prioritas<br/>Kritikal?"}
-    SELESAI_TIDAK_BOLEH(["END: ❌ Bypass (Tier-0)"])
+    CEK_PRIO{"Apakah Kontainer Memiliki Tag Prioritas?<br/>(Database/Proxy)"}
+    LEWAT_PRIO(["Bypass: Kebal Pembekuan"])
 
-    BARU{"Apakah Tracking<br/>Initial (Baru)?"}
-    CATAT_BARU["Inisialisasi State Tracking"]
-    SELESAI_PERTAMA(["END: Tunda ke Siklus (t+1)"])
+    CEK_STATUS_BEKU{"Apakah Kontainer Sedang Dalam Status FROZEN?"}
 
-    SUDAH_BEKU{"Apakah Status<br/>Sudah FROZEN?"}
-
-    subgraph CEK_DURASI["Fase Evaluasi Durasi Freeze"]
-        BERAPA_LAMA["Hitung Durasi Freeze (Δt)"]
-        TERLALU_LAMA{"Apakah Durasi Freeze<br/>> 1000ms?"}
-        SELESAI_BANGUNKAN(["END: ⏰ Force-Thaw (Unfreeze)"])
-        SELESAI_MASIH_OK(["END: Pertahankan FROZEN"])
+    subgraph PENGAWAS_WAKTU["1. Pengawas Batas Durasi Maksimal (Timeout Watchdog)"]
+        HITUNG_LAMA_BEKU["Hitung Durasi Pembekuan (milidetik)"]
+        LEBIH_1000MS{"Durasi ≥ 1000ms?"}
+        PAKSA_CAIR["⏰ Paksa Cairkan (Force-Thaw):<br/>Tulis '0' ke cgroup.freeze & Akumulasi Durasi"]
+        TETAP_BEKU["Pertahankan Status Beku"]
     end
 
-    HITUNG_IDLE["Hitung Durasi Idle (Δt)"]
+    subgraph DETEKSI_IDLE["2. Pendeteksian Keadaan Menganggur (Event Kernel)"]
+        TANYA_KERNEL["Periksa Event Kernel (cgroup.events)"]
+        KERNEL_ADA{"Dukungan Kernel v2 Ada?"}
+        PROSES_AKTIF{"Kernel: populated == 1?<br/>(Masih Ada Proses Berjalan)"}
+        BATAL_AKTIF["Batal: Kontainer Sedang Aktif Memproses"]
 
-    subgraph DETEKSI["Fase Deteksi Idle (Kernel-Level)"]
-        TANYA_KERNEL["Cek cgroup.events 'populated'"]
-        BISA_TANYA{"Apakah Host Mendukung<br/>cgroup v2?"}
-
-        AKTIF{"Apakah populated == 1?<br/>(Container Aktif)"}
-        SELESAI_BELUM_IDLE(["END: Container Aktif → Abort"])
-
-        CUKUP_LAMA{"Apakah Idle Terjadi<br/>≥ 800ms?"}
-        SELESAI_BARU_SAJA(["END: False-Idle Risk → Abort"])
-
-        FALLBACK{"Apakah Polling Idle<br/>≥ Threshold?"}
-        SELESAI_BARU_SAJA2(["END: False-Idle Risk → Abort"])
+        TENANG_08S{"Apakah Masa Tenang Beban ≥ 0.8 Detik?"}
+        BATAL_SEBENTAR["Batal: Durasi Tenang Belum Cukup"]
     end
 
-    subgraph KEAMANAN["Fase Safety Gate (eBPF)"]
-        CEK_TRANSAKSI{"Apakah Ada Transaksi DB<br/>Aktif Terbuka?"}
-        SELESAI_TUNDA(["END: ⏸️ Defer Eksekusi (Mencegah I/O Corrupt)"])
+    subgraph GERBANG_KEAMANAN["3. Gerbang Integritas Transaksi (eBPF)"]
+        CEK_TRANSAKSI{"Apakah eBPF Mendeteksi Koneksi / Transaksi DB Aktif?"}
+        TUNDA_BEKU["⏸️ Tunda Pembekuan: Cegah Korupsi Data In-Flight"]
     end
 
-    subgraph BEKUKAN["Fase Eksekusi State"]
-        SIMULASI{"Apakah DRY_RUN<br/>Mode Aktif?"}
-        CATAT_SAJA["Log Eksekusi Saja"]
-        TULIS_BEKU["❄️ Inisiasi Freeze (cgroup.freeze=1)"]
-        RECLAIM["Trigger memory.reclaim<br/>(Bebaskan Page Cache)"]
-        TANDAI["Update Tracking State = FROZEN"]
-        SELESAI(["END: Siklus Freeze Selesai"])
+    subgraph EKSEKUSI_FREEZE["4. Eksekusi Pembekuan & Reklamasi Memori"]
+        TULIS_FREEZE["❄️ Bekukan Kontainer: Tulis '1' ke cgroup.freeze"]
+        REKLAMASI_RAM["Picu memory.reclaim = 0 untuk Membebaskan Page Cache RAM"]
+        CATAT_TELEMETRI["Update Status = FROZEN & Catat Timestamp"]
     end
 
-    START --> PENTING
-    PENTING -->|Ya| SELESAI_TIDAK_BOLEH
-    PENTING -->|Tidak| BARU
-    BARU -->|Ya| CATAT_BARU
-    CATAT_BARU --> SELESAI_PERTAMA
-    BARU -->|Tidak| SUDAH_BEKU
+    SELESAI(["END: Status Kontainer 0.0% CPU (State di RAM Tetap Utuh)"])
 
-    SUDAH_BEKU -->|Ya| BERAPA_LAMA
-    BERAPA_LAMA --> TERLALU_LAMA
-    TERLALU_LAMA -->|Ya| SELESAI_BANGUNKAN
-    TERLALU_LAMA -->|Tidak| SELESAI_MASIH_OK
+    START --> CEK_PRIO
+    CEK_PRIO -->|Ya| LEWAT_PRIO
+    CEK_PRIO -->|Tidak| CEK_STATUS_BEKU
 
-    SUDAH_BEKU -->|Tidak| HITUNG_IDLE
-    HITUNG_IDLE --> TANYA_KERNEL
-    TANYA_KERNEL --> BISA_TANYA
+    CEK_STATUS_BEKU -->|Ya| HITUNG_LAMA_BEKU
+    HITUNG_LAMA_BEKU --> LEBIH_1000MS
+    LEBIH_1000MS -->|Ya| PAKSA_CAIR
+    LEBIH_1000MS -->|Tidak| TETAP_BEKU
 
-    BISA_TANYA -->|Ya| AKTIF
-    AKTIF -->|"Ya"| SELESAI_BELUM_IDLE
-    AKTIF -->|"Tidak"| CUKUP_LAMA
-    CUKUP_LAMA -->|"Belum"| SELESAI_BARU_SAJA
-    CUKUP_LAMA -->|"Sudah"| CEK_TRANSAKSI
+    CEK_STATUS_BEKU -->|Tidak| TANYA_KERNEL
+    TANYA_KERNEL --> KERNEL_ADA
 
-    BISA_TANYA -->|Tidak| FALLBACK
-    FALLBACK -->|"Belum"| SELESAI_BARU_SAJA2
-    FALLBACK -->|"Sudah"| CEK_TRANSAKSI
+    KERNEL_ADA -->|Ya| PROSES_AKTIF
+    PROSES_AKTIF -->|Ya| BATAL_AKTIF
+    PROSES_AKTIF -->|Tidak| TENANG_08S
 
-    CEK_TRANSAKSI -->|Ya| SELESAI_TUNDA
-    CEK_TRANSAKSI -->|Tidak| SIMULASI
+    KERNEL_ADA -->|Tidak| TENANG_08S
 
-    SIMULASI -->|Ya| CATAT_SAJA
-    SIMULASI -->|Tidak| TULIS_BEKU
-    CATAT_SAJA --> TANDAI
-    TULIS_BEKU --> RECLAIM
-    RECLAIM --> TANDAI
-    TANDAI --> SELESAI
+    TENANG_08S -->|Tidak| BATAL_SEBENTAR
+    TENANG_08S -->|Ya| CEK_TRANSAKSI
+
+    CEK_TRANSAKSI -->|Ya| TUNDA_BEKU
+    CEK_TRANSAKSI -->|Tidak| TULIS_FREEZE
+
+    TULIS_FREEZE --> REKLAMASI_RAM
+    REKLAMASI_RAM --> CATAT_TELEMETRI
+    CATAT_TELEMETRI --> SELESAI
+
+    PAKSA_CAIR --> SELESAI
+    TETAP_BEKU --> SELESAI
+    BATAL_AKTIF --> SELESAI
+    BATAL_SEBENTAR --> SELESAI
+    TUNDA_BEKU --> SELESAI
 ```

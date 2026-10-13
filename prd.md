@@ -94,26 +94,44 @@ Full technical spec: `architecture.md` §3.
       Containers" UI panel. No restart required to change scope.
   - **Host `/proc` Mount Verification:** validates at cold start that `/proc` is the
     host's (not the container's own) by cross-checking CPU count. Requires `pid: host`.
-  - **Network-Infra Auto-Priority:** containers matching known proxy/DNS image patterns
-    (`nginx`, `caddy`, `traefik`, `cloudflared`, `coredns`) are force-tagged
+  - **Critical Port Auto-Exclusion & Auto-Priority:**
+    - `CRITICAL_PORTS_EXCLUDE`: containers binding database ports (3306, 5432, 6379, 27017,
+      27018, 5984, 9200, 9300, 5672, 15672, 2181), container runtime/orchestration (2376, 2377),
+      SSH (22, 2222, 2206), or VPN (1194, 51820, 500) are automatically excluded at runtime to prevent
+      data corruption or lockout.
+    - `CRITICAL_PORTS_PRIORITY`: containers binding web/DNS ports (80, 443, 8080, 8443, 53, 123)
+      are automatically tagged `priority=True` (shielded from hard CPU/RAM caps).
+  - **Network-Infra Auto-Priority:** containers matching known proxy/DNS/tunnel image patterns
+    (`nginx`, `caddy`, `traefik`, `cloudflared`, `coredns`, `haproxy`, `envoy`, `tailscale`, `tailscaled`) are force-tagged
     `priority=True` to prevent freezing/throttling network infrastructure.
   - **`nf_conntrack_max` Pre-flight:** warns if below 65536 — saturated conntrack
     drops connections regardless of cgroup settings.
+  - **Universal Exclusion List:** `EXCLUDED_CONTAINERS` (`hecf`, `hecf-dashboard`, `cloudflared`, `cloudflared-tunnel`, `tailscale`, `tailscaled`, `wireguard`) ensures core framework components and critical tunnels are never throttled or frozen, regardless of whitelist settings.
+  - **Strict Whitelist Mode:** `STRICT_WHITELIST_MODE` allows requiring an explicit non-empty whitelist
+    before HECF manages any containers.
 
 - **Layer 2: Monitoring Engine**
   - Reads CPU/Memory metrics **directly from cgroups v2 (cgroupfs)**, bypassing the
     Docker REST API to minimize overhead.
   - **`memory.stat` over `memory.current`:** computes `actual = memory.current -
     inactive_file` to exclude reclaimable page-cache from RAM measurement (Metric #2).
-  - **Adaptive Sampling:** 10s interval when CPU(t-1) > 60% OR any container is in an escalated state (Guardrail/Aggressive); 30s otherwise.
-  - **Event-Driven Idle Detection:** Micro-Freezing idle state uses `cgroup.events`
-    `populated 0` signal instead of polling-based CPU threshold, eliminating
-    false-idle/false-active during inter-poll gaps.
+  - **Read Retry & Stale Detection:** retries cgroupfs read once after 100ms
+    (`MONITOR_RETRY_COUNT=1`, `MONITOR_RETRY_DELAY_MS=100`). If still failing, returns a
+    stale marker (`stale: True`) so the control loop safely skips shaping rather than acting
+    on corrupted data or terminated containers.
+  - **Adaptive Sampling:** 10s interval when CPU(t-1) ≥ 60% OR any container is in an escalated state
+    (`GUARDRAIL`, `AGGRESSIVE`, `BALANCED`, or `EDOS_FREEZE`); 30s otherwise.
 
 - **Layer 3: Hybrid Control Engine**
-  - **3A. Guardrail:** emergency throttle if CPU > 80% OR RAM > 90% in ≥3 of last 5
-    samples. Includes a **Derivative Pre-emptive Trigger** (`d(EMA)/dt > 5.0` CPU-points/sample AND `EMA > 50%`) to throttle before thresholds are hit.
+  - **3A. Guardrail:** emergency throttle if CPU > effective threshold OR RAM > 90% in ≥3 of last 5
+    samples.
+  - **EMA Pre-Warning Margin:** If the EMA prediction trend is approaching the limit
+    (`EMA ≥ 75.0%`, from `GUARDRAIL_CPU_THRESHOLD - PRE_WARNING_MARGIN 5.0%`), the effective
+    CPU threshold automatically lowers to 75.0% for early alertness.
+  - **Derivative Pre-emptive Trigger:** `d(EMA)/dt > 5.0` CPU-points/sample AND `EMA > 50%`
+    throttles proactively before the hard threshold is reached.
   - **3B. Tier Detection:** Single sliding window (`TIER_WINDOW` = 120 samples); `spike_ratio = P95/P50`.
+    - Cold-start fallback: forces **Tier 2 (Balanced)** for the first 10 samples.
     - Tier 1 (Aggressive): ratio > 2.0
     - Tier 2 (Balanced): 1.5 ≤ ratio ≤ 2.0
     - Tier 3 (Soft): ratio < 1.5
@@ -122,15 +140,21 @@ Full technical spec: `architecture.md` §3.
   - **Symmetric Hysteresis:** tier transitions (up or down) require 3 consecutive samples (`TIER_HYSTERESIS_SAMPLES`). Revised from asymmetric 1/5 after experiments showed slow de-escalation held throttling too long and violated the Spike SLA.
   - **PSI Internal Signal:** `cpu.pressure` `some avg10` supplements the Guardrail's
     CPU/RAM thresholds as an internal control signal (not a new tracked metric).
+  - **Pre-emptive Scale-Up:** When Guardrail is normal but `spike_ratio > 1.5`, `action = PREEMPTIVE_SCALEUP`
+    releases CPU quota (`quota = -1`), preventing throttling from degrading latency during sudden bursts.
 
 - **Layer 4: Adaptive Resource Shaping**
   - Translates Layer 3 decisions into live cgroups v2 parameter updates (`cpu.max`,
-    `memory.max`, `memory.swap.max`) without container restarts.
-  - Priority-aware: throttles `non-priority` containers first/harder under Tier 1.
+    `memory.max`, `memory.high`, `memory.swap.max`) without container restarts.
+  - Priority-aware: throttles `non-priority` containers first/harder under Tier 1; shields `priority=True` containers.
+  - **CPU Minimum Floor & Validation:** enforces a safety floor of 0.2 Core (`quota ≥ 20000 µs` with period 100000 µs)
+    and verifies writes with read-back validation.
   - **Micro-Freezing:** when a non-priority container is idle (no inbound requests)
     for ≥0.8 seconds, Layer 4 writes `cgroup.freeze = 1` to drop CPU usage to exactly
     **0%** while keeping the container resident in RAM, and triggers `memory.reclaim` (kernel ≥ 6.1) to free page cache. On the next request, the
-    container thaws in **<1ms**. Hard cap: 500–1000ms per freeze cycle.
+    container thaws in **<1ms**. Hard cap: 1000ms per freeze cycle.
+    Uses **Event-Driven Idle Detection** (`cgroup.events populated 0`) instead of polling-based CPU thresholds,
+    eliminating false-idle/false-active during inter-poll gaps.
   - **zram-as-swap + `memory.swap.max`:** verifies zram-backed swap at cold start;
     sets `memory.swap.max` to allow compressed swap (or 0 if no zram) to prevent
     uncontrolled disk thrashing.
@@ -139,9 +163,8 @@ Full technical spec: `architecture.md` §3.
     time to react.
   - **TCP Backlog Verification:** at cold start, confirms the host's `somaxconn`
     value provides enough headroom to queue inbound packets during a freeze window
-    without dropping connections. Extended to also check app-level listen backlog
-    via `/proc/<pid>/net/tcp` — apps compiled with `listen(fd, 5)` will still drop
-    connections even if `somaxconn=4096`.
+    without dropping connections (default min headroom 4096). Extended to also check app-level listen backlog
+    via `/proc/<pid>/net/tcp`.
 
 #### 4.2 Energy Estimation — Hybrid Hardware/Software Model
 
@@ -164,6 +187,10 @@ the deployment environment:
   count (`cpu_count × 3.75W` and `cpu_count × 13.5W` respectively), making the
   model self-calibrating for the actual hardware environment.
 
+- **Micro-Frozen Container Power:** When a container is micro-frozen (`is_frozen=True`),
+  the estimator returns `p_idle` as the container baseline footprint, avoiding zero-value anomalies
+  that can disrupt dataset processing in environments without physical power sensors.
+
 - **Output:** Joule and kWh only. **No carbon/CO2e conversion of any kind** —
   explicitly removed from scope (proposal §1.6).
 
@@ -175,9 +202,9 @@ total server capacity. Required to validate Hypothesis H2 and answer RQ1.
 
 #### 4.4 Real-time Metrics Dashboard
 
-- **Production-grade Gunicorn server** (2 workers × 4 threads, port 8092) — replaces
-  the Flask dev server to handle concurrent browser/API requests without blocking,
-  preventing HTTP 524 gateway timeouts that the single-threaded dev server caused.
+- **Production-grade Gunicorn server** (1 worker × 2 threads, port 8092) — replaces
+  the Flask dev server to handle concurrent browser/API requests with minimal memory footprint,
+  reading the last ~200 rows of `metrics.csv` using efficient tail-read.
 - Visualizes exactly the **5 evaluation metrics** defined in §9.
 - No historical database; live aggregation from `metrics.csv` only.
 - Container action states visible in the tracking table (e.g., MICRO_FREEZE,

@@ -1,140 +1,141 @@
-# Flowchart — Monitor.get_container_stats() (Layer 2)
+# Flowchart — Monitor.get_stats() (Layer 2)
 
-> **Kode Sumber:** `framework/monitor.py` → class `Monitor`, fungsi `get_stats()` (baris 102–155)
-> **Posisi di Diagram:** Layer 2 — Monitoring Engine → Direct cgroupfs v2 Read
+> **Kode Sumber:** `framework/monitor.py` → class `Monitor`, fungsi `get_stats()`, `_read_raw_stats()`, dan `get_adaptive_interval()` (baris 19–186)
+> **Posisi di Diagram:** Layer 2 — Monitoring Engine → Direct cgroupfs v2 Read & Adaptive Polling
 > **Kategori:** 🌟 INOVASI ALGORITMA (S2)
 
-Algoritma pembacaan I/O kernel langsung tanpa perantara Docker API. Metode ini memangkas latency overhead dari ~15ms (Docker API) menjadi <1ms (Sysfs Read), sangat kritikal untuk sampling rate tinggi (adaptive sampling).
+Algoritma pembacaan telemetri kernel secara langsung tanpa perantara Docker REST API. Membaca `cpu.stat` (akumulasi mikrodetik pemrosesan CPU) dan `memory.current` dikurangi `inactive_file` dari `memory.stat` untuk mengecualikan page cache kernel yang dapat direklamasi. Dilengkapi mekanisme retry (`MONITOR_RETRY_COUNT=1`, jeda 100ms) dan penanda `stale: True` agar main control loop tidak melakukan pemotongan kuota saat kontainer mati.
 
 ```mermaid
 flowchart TD
     START(["get_stats(container_name, container_id)"])
 
-    RESOLVE_PATH["Resolusi cgroup path via _get_cgroup_path(container_id):<br/>/sys/fs/cgroup/system.slice/docker-{id}.scope"]
-    CGROUP_FOUND{"Path valid?"}
-    STALE_RET(["Return _stale_result()<br/>{stale: True, cpu_percent: -1}"])
+    RESOLVE["Resolusi Path cgroupfs v2:<br/>1. /sys/fs/cgroup/system.slice/docker-{id}.scope<br/>2. /sys/fs/cgroup/docker/{id}<br/>3. /sys/fs/cgroup/system.slice/docker.service/docker-{id}.scope"]
+    PATH_FOUND{"Path valid?"}
+    STALE_PATH(["Return _stale_result():<br/>{cpu_percent: -1.0, mem_percent: -1.0, stale: True}"])
 
-    RETRY_LOOP["Iterasi baca (max 3 retries)"]
+    RETRY_LOOP["Loop Pembacaan Raw Stats:<br/>attempt = 0 s.d. MONITOR_RETRY_COUNT (1+1=2)"]
 
-    READ_CPU["Baca cpu.stat<br/>Parse usage_usec"]
-    READ_MEM["Baca memory.current (total)"]
-    READ_INACT["Baca memory.stat<br/>Parse inactive_file"]
+    READ_CPU["1. Buka cpu.stat → parse baris 'usage_usec'"]
+    READ_MEM_CURR["2. Buka memory.current → mem_current"]
+    READ_MEM_STAT["3. Buka memory.stat → parse 'inactive_file'"]
+    CALC_MEM_ACTUAL["mem_usage = max(0, mem_current - inactive_file)<br/>(Memori Efektif tanpa reclaimable cache)"]
 
-    CALC_MEM["Memori Efektif = memory.current - inactive_file"]
+    READ_MEM_MAX["4. Buka memory.max:<br/>Jika 'max' / error → pakai _host_mem_bytes (dari /proc/meminfo)<br/>Selain itu → int(val)"]
 
-    MEM_MAX_CHECK{"memory.max == max?"}
-    USE_HOST_MEM["Limit = Total Host RAM"]
-    USE_LIMIT["Limit = memory.max"]
+    READ_ERR{"OSError saat baca<br/>cpu.stat / memory?"}
+    RETRY_CHECK{"attempt &lt;<br/>MONITOR_RETRY_COUNT?"}
+    SLEEP_RETRY["time.sleep(MONITOR_RETRY_DELAY_MS / 1000.0)<br/>(Default: 100ms)"]
+    STALE_FAIL(["Log warning: Semua read gagal<br/>Return _stale_result()"])
 
-    CALC_MEM_PCT["mem_pct = (Efektif / Limit) × 100"]
+    CHECK_PREV{"Container ada di<br/>_prev_stats?"}
+    FIRST_SAMPLE["cpu_percent = 0.0<br/>(Belum ada delta waktu t_0)"]
 
-    READ_FAIL{"I/O Error?"}
-    RETRY{"Retries < 3?"}
-    RETRY_WAIT["time.sleep(0.01)"]
-    ALL_FAIL(["Return _stale_result()<br/>{stale: True, cpu_percent: -1}"])
+    CALC_DELTAS["time_delta = now - prev['time']<br/>usage_delta = (usage_usec - prev['usage_usec']) / 1,000,000.0<br/>cpu_percent = (usage_delta / time_delta) × 100.0"]
 
-    HAS_PREV{"Ada prev_stats?"}
-    FIRST_SAMPLE["Simpan current stats<br/>Return cpu_pct = 0.0"]
+    CALC_MEM_PCT["mem_percent = (mem_usage / mem_limit) × 100.0"]
 
-    CALC_CPU["Hitung CPU %:<br/>Δ usage_usec / Δ time"]
+    SAVE_STATE["_prev_stats[name] = {'time': now, 'usage_usec': usage_usec}"]
 
-    SAVE_STATE["prev_stats[name] = current stats"]
+    RETURN(["Return {name, cpu_percent, mem_percent,<br/>mem_usage, mem_limit, stale: False}"])
 
-    RETURN(["Return {cpu_percent, mem_percent,<br/>mem_usage, mem_limit, stale: False}"])
-
-    START --> RESOLVE_PATH
-    RESOLVE_PATH --> CGROUP_FOUND
-    CGROUP_FOUND -->|Tidak| STALE_RET
-    CGROUP_FOUND -->|Ya| RETRY_LOOP
+    START --> RESOLVE
+    RESOLVE --> PATH_FOUND
+    PATH_FOUND -->|Tidak| STALE_PATH
+    PATH_FOUND -->|Ya| RETRY_LOOP
 
     RETRY_LOOP --> READ_CPU
-    READ_CPU --> READ_MEM
-    READ_MEM --> READ_INACT
-    READ_INACT --> CALC_MEM
-    CALC_MEM --> MEM_MAX_CHECK
-    MEM_MAX_CHECK -->|Ya| USE_HOST_MEM
-    MEM_MAX_CHECK -->|Tidak| USE_LIMIT
-    USE_HOST_MEM --> CALC_MEM_PCT
-    USE_LIMIT --> CALC_MEM_PCT
+    READ_CPU --> READ_ERR
+    READ_ERR -->|Ya| RETRY_CHECK
+    RETRY_CHECK -->|Ya| SLEEP_RETRY
+    SLEEP_RETRY --> RETRY_LOOP
+    RETRY_CHECK -->|Tidak| STALE_FAIL
 
-    READ_CPU -.-> READ_FAIL
-    READ_FAIL -->|Ya| RETRY
-    RETRY -->|Ya| RETRY_WAIT
-    RETRY_WAIT --> RETRY_LOOP
-    RETRY -->|Tidak| ALL_FAIL
+    READ_ERR -->|Tidak| READ_MEM_CURR
+    READ_MEM_CURR --> READ_MEM_STAT
+    READ_MEM_STAT --> CALC_MEM_ACTUAL
+    CALC_MEM_ACTUAL --> READ_MEM_MAX
+    READ_MEM_MAX --> CHECK_PREV
 
-    CALC_MEM_PCT --> HAS_PREV
-    HAS_PREV -->|Tidak| FIRST_SAMPLE
-    HAS_PREV -->|Ya| CALC_CPU
+    CHECK_PREV -->|Tidak| FIRST_SAMPLE
+    CHECK_PREV -->|Ya| CALC_DELTAS
 
-    CALC_CPU --> SAVE_STATE
-    FIRST_SAMPLE --> RETURN
+    FIRST_SAMPLE --> CALC_MEM_PCT
+    CALC_DELTAS --> CALC_MEM_PCT
+    CALC_MEM_PCT --> SAVE_STATE
     SAVE_STATE --> RETURN
 ```
 
+---
+
 ## Alur Logika Konseptual
 
-### Akuisisi Metrik Utilisasi
+### 1. Akuisisi Metrik Kernel Langsung
 
 ```mermaid
 flowchart TD
-    START(["START: Akuisisi Metrik Container"])
+    START(["START: Akuisisi Telemetri Kontainer"])
 
-    CARI["Resolusi path cgroupfs target"]
-    KETEMU{"Apakah Path<br/>Valid?"}
-    SELESAI_GAGAL(["END: Abort — Return {stale: True}<br/>(main loop akan skip shaping)"])
+    CARI_PATH["Temukan direktori cgroup v2 kontainer pada hierarki unified"]
+    VALID{"Direktori Ditemukan?"}
+    ABORT_STALE(["END: Return Status Stale (Abaikan Siklus Ini)"])
 
-    BACA_CPU["Baca cpu.stat (usage_usec)"]
-    BACA_RAM["Baca memory.current (RSS + Cache)"]
-    KURANGI["Kalkulasi Memori Efektif:<br/>Total Memori - Reclaimable Cache"]
+    BACA_STAT["Baca cpu.stat (akumulasi pemakaian CPU dalam mikrodetik)"]
+    BACA_RAM["Baca memory.current dan memory.stat"]
+    KURANGI_CACHE["Kalkulasi RAM Riil:<br/>Penggunaan RAM = memory.current − inactive_file"]
 
-    GAGAL{"Apakah Terjadi<br/>I/O Error?"}
-    COBA_LAGI{"Apakah Max Retries<br/>Tercapai?"}
-    TUNGGU["Backoff & Retry"]
-    SEMUA_GAGAL["Abort: Max Retries→ Return {stale: True}"]
+    GAGAL_BACA{"I/O Error?"}
+    COBA_ULANG{"Masih Ada Kuota Retry?<br/>(MONITOR_RETRY_COUNT=1)"}
+    JEDA_ULANG["Jeda 100ms dan Coba Kembali"]
+    TOTAL_GAGAL["Semua Percobaan Gagal → Return Stale"]
 
-    PERTAMA{"Apakah Pembacaan Pertama?<br/>(Belum ada baseline)"}
-    NOL["CPU = 0%<br/>(Butuh t=1 untuk delta)"]
-    HITUNG["Hitung CPU %:<br/>(Δ usage_usec / Δ time) × 100"]
-    HITUNG_RAM["Hitung Memori %:<br/>(Efektif / Limit) × 100"]
+    CEK_BASELINE{"Apakah Ada Baseline Sampel Sebelumnya?"}
+    CPU_NOL["Set CPU% = 0.0 (Titik Referensi Awal)"]
+    HITUNG_CPU["Hitung CPU% dari Laju Pertambahan Mikrodetik:<br/>CPU% = (Δ usage_usec ÷ 1.000.000 ÷ Δ waktu) × 100"]
 
-    SIMPAN["Simpan state (t) sebagai baseline (t-1)"]
-    SELESAI(["END: Return {cpu_percent, mem_percent,<br/>mem_usage, mem_limit, stale: False}"])
+    HITUNG_RAM["Hitung RAM% Terhadap Limit (memory.max atau Total Host RAM)"]
+    SIMPAN_STATE["Simpan Timestamp & Penggunaan untuk Perhitungan Siklus Berikutnya"]
 
-    START --> CARI
-    CARI --> KETEMU
-    KETEMU -->|Tidak| SELESAI_GAGAL
-    KETEMU -->|Ya| BACA_CPU
-    BACA_CPU --> BACA_RAM
-    BACA_RAM --> KURANGI
+    SELESAI(["END: Return Metrik {CPU%, RAM%, Stale: False}"])
 
-    BACA_CPU -.-> GAGAL
-    GAGAL -->|Ya| COBA_LAGI
-    COBA_LAGI -->|Belum| TUNGGU
-    TUNGGU --> BACA_CPU
-    COBA_LAGI -->|Sudah| SEMUA_GAGAL
-    SEMUA_GAGAL --> SELESAI_GAGAL
+    START --> CARI_PATH
+    CARI_PATH --> VALID
+    VALID -->|Tidak| ABORT_STALE
+    VALID -->|Ya| BACA_STAT
 
-    KURANGI --> PERTAMA
-    PERTAMA -->|Ya| NOL
-    PERTAMA -->|Tidak| HITUNG
-    NOL --> HITUNG_RAM
-    HITUNG --> HITUNG_RAM
-    HITUNG_RAM --> SIMPAN
-    SIMPAN --> SELESAI
+    BACA_STAT --> GAGAL_BACA
+    GAGAL_BACA -->|Ya| COBA_ULANG
+    COBA_ULANG -->|Ya| JEDA_ULANG
+    JEDA_ULANG --> BACA_STAT
+    COBA_ULANG -->|Tidak| TOTAL_GAGAL
+    TOTAL_GAGAL --> ABORT_STALE
+
+    GAGAL_BACA -->|Tidak| BACA_RAM
+    BACA_RAM --> KURANGI_CACHE
+    KURANGI_CACHE --> CEK_BASELINE
+
+    CEK_BASELINE -->|Tidak| CPU_NOL
+    CEK_BASELINE -->|Ya| HITUNG_CPU
+
+    CPU_NOL --> HITUNG_RAM
+    HITUNG_CPU --> HITUNG_RAM
+    HITUNG_RAM --> SIMPAN_STATE
+    SIMPAN_STATE --> SELESAI
 ```
 
-### Penyesuaian Frekuensi Pemantauan (Adaptive Sampling)
+---
+
+### 2. Penyesuaian Interval Pemantauan Adaptif (`get_adaptive_interval`)
 
 ```mermaid
 flowchart TD
-    START(["START: Evaluasi Sampling Interval"])
+    START_INTERVAL(["get_adaptive_interval(cpu_percent)"])
 
-    SIBUK{"Apakah Max CPU<br/>> 60%?"}
-    SELESAI_SERING(["END: Interval = 10s (High Resolution)"])
-    SELESAI_JARANG(["END: Interval = 30s (Low Overhead)"])
+    CEK_BEBAN{"cpu_percent ≥ 60.0%<br/>(SAMPLING_CPU_THRESHOLD)?"}
+    INTERVAL_10S(["Return 10s (SAMPLING_INTERVAL_HIGH)<br/>Resolusi tinggi saat sistem sibuk"])
+    INTERVAL_30S(["Return 30s (SAMPLING_INTERVAL_LOW)<br/>Minim overhead saat sistem tenang"])
 
-    START --> SIBUK
-    SIBUK -->|Ya| SELESAI_SERING
-    SIBUK -->|Tidak| SELESAI_JARANG
+    START_INTERVAL --> CEK_BEBAN
+    CEK_BEBAN -->|Ya| INTERVAL_10S
+    CEK_BEBAN -->|Tidak| INTERVAL_30S
 ```

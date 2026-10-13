@@ -1,82 +1,108 @@
-# Flowchart — Shaper.apply_shaping() (Layer 4)
+# Flowchart — shaper.shape_container() (Layer 4)
 
-> **Kode Sumber:** `framework/shaper.py` → fungsi `shape_container()` (baris 33–81)
-> **Posisi di Diagram:** Layer 4 — Adaptive Resource Shaping → 4A Cgroups Writer
+> **Kode Sumber:** `framework/shaper.py` → fungsi `shape_container()`, `_write_cpu()`, `_write_memory()`, `_write_swap_max()`, dan `reclaim_memory()` (baris 36–246)
+> **Posisi di Diagram:** Layer 4 — Adaptive Resource Shaping → 4A Cgroups v2 Parameter Writer
 > **Kategori:** 🛠️ TOOLS & INFRASTRUKTUR (S1)
 
-Shaper bertugas sebagai eksekutor. Menerima input dari Layer 3 (Tier & Limit) dan menulisnya ke file `/sys/fs/cgroup/cpu.max` dan `memory.max`. Layer ini bersifat "bodoh", murni I/O bound.
+Shaper bertindak sebagai subsistem eksekutif Linux cgroups v2. Menulis batas alokasi komputasi dan memori langsung ke kernel unified hierarchy tanpa me-restart kontainer.
+- **Perlindungan Kontainer Prioritas (Shielding):** Kontainer bertanda `priority=True` (e.g. database / network infra) dilindungi dari pembatasan kuota keras CPU (`cpu_quota > 0`) dan pembatasan memori (`mem_ratio`).
+- **Batas Bawah CPU (Minimum Floor):** Mencegah penalti starvation dengan batas bawah minimal 0.2 Core (`cpu_quota ≥ 20.000 µs`).
+- **Read-Back Validation:** Verifikasi pembacaan ulang setelah menulis `cpu.max` untuk mendeteksi penolakan terselubung oleh scheduler kernel Linux (dengan 1× retry).
+- **Pembatasan Memori Multi-Tingkat (Khusus Non-Priority pada Guardrail/Aggressive):**
+  - `memory.max`: Batas keras alokasi RAM (`host_mem_bytes × mem_ratio`).
+  - `memory.high`: Ambang soft-brake kernel pada 85% (`MEMORY_HIGH_RATIO = 0.85`) untuk memperlambat laju alokasi sebelum terkena OOM killer.
+  - `memory.swap.max`: Penyesuaian swap berdasarkan ketersediaan swap terkompresi `zram`. Jika tidak ada zram, swap diset ke `0` untuk mencegah disk thrashing.
+- **Proactive Memory Reclaim (`reclaim_memory`):** Menulis `0` ke `memory.reclaim` (kernel Linux ≥ 6.1) saat kontainer dibekukan/idle.
 
 ```mermaid
 flowchart TD
     START(["shape_container(name, id, priority, cpu_quota,<br/>cpu_period, dry_run, mem_ratio, host_mem_bytes)"])
 
-    PRIO{"priority=True<br/>AND cpu_quota > 0?"}
-    SKIP(["Return True<br/>(Shield — log SHIELD)"])
+    CHECK_PRIO{"priority == True<br/>DAN cpu_quota &gt; 0?"}
+    SKIP_SHIELD(["Log [SHIELD]: Kontainer Prioritas<br/>Bypass pembatasan keras<br/>Return True"])
 
-    DRY_RUN{"DRY_RUN_MODE?"}
-    LOG_ONLY["Log 'Would shape...'"]
-    RETURN_DRY(["Return"])
+    CHECK_DRY{"dry_run == True?"}
+    LOG_DRY(["Log [DRY-RUN] Simulasi pembatasan<br/>Return True"])
 
-    RESOLVE_PATH["Resolusi cgroup path"]
-    PATH_FOUND{"Path valid?"}
-    ABORT(["Return (Target terminated)"])
+    RESOLVE_PATH["Resolusi Path cgroup v2 Kontainer"]
+    PATH_EXISTS{"Path Ditemukan?"}
+    ABORT_PATH(["Log warning: cgroup path tidak ditemukan<br/>Return False"])
 
-    CPU_QUOTA{"cpu_quota<br/>> 0?"}
-    WRITE_UNLIMITED["Tulis 'max' ke cpu.max<br/>(Unlimited — hapus kuota)"]
-    WRITE_LIMITED["Tulis '{quota} {period}' ke cpu.max<br/>(Throttled)"]
+    subgraph CPU_SHAPING["Modulasi CPU (cpu.max)"]
+        CHECK_MIN_FLOOR{"0 &lt; cpu_quota &lt;<br/>period × 0.2 (20.000 µs)?"}
+        CLAMP_FLOOR["cpu_quota = 20.000 µs<br/>(Batas Bawah Aman 0.2 Core)"]
 
-    VERIFY_CPU["Baca ulang cpu.max untuk verifikasi"]
-    CPU_ERR{"I/O Error?"}
-    RETRY_CPU["Retry max 3 kali"]
+        CHECK_UNLIMITED{"cpu_quota ≤ 0?"}
+        WRITE_MAX["expected = 'max'<br/>Tulis 'max' ke cpu.max (Lepas Limit)"]
+        WRITE_QUOTA["expected = '{quota} {period}'<br/>Tulis ke cpu.max (Batas Diterapkan)"]
 
-    MEM_RATIO{"mem_ratio<br/>ditentukan?"}
-    RETURN(["Return"])
+        VALIDATE_READ["_validate_write():<br/>Baca ulang file cpu.max"]
+        VAL_MATCH{"Isi file sesuai<br/>nilai yang ditulis?"}
+        RETRY_CPU["Log warning: Retry tulis cpu.max 1 kali"]
+        CPU_SUCCESS["CPU Shaping OK"]
+    end
 
-    CALC_MEM["mem_limit = host_ram * mem_ratio"]
-    WRITE_MEM["Tulis ke memory.max"]
-    WRITE_HIGH["Tulis ke memory.high (soft limit)"]
+    subgraph MEM_SHAPING["Modulasi Memori (Non-Priority Saja)"]
+        CHECK_MEM_COND{"mem_ratio di-set<br/>DAN priority == False<br/>DAN host_mem_bytes &gt; 0?"}
+        MEM_BYPASS["Bypass Modulasi RAM<br/>(Kontainer normal/prioritas)"]
 
-    ZRAM_AVAIL{"ZRAM (Swap)<br/>Aktif?"}
-    SWAP_ALLOW["Tulis mem_limit ke memory.swap.max"]
-    SWAP_DISABLE["Tulis 0 ke memory.swap.max"]
+        CALC_MEM_BYTES["mem_bytes = int(host_mem_bytes × mem_ratio)"]
+        WRITE_MEM_MAX["1. Tulis mem_bytes ke memory.max (Hard Limit)"]
 
-    START --> PRIO
-    PRIO -->|Ya| SKIP
-    PRIO -->|Tidak| DRY_RUN
-    DRY_RUN -->|Ya| LOG_ONLY
-    LOG_ONLY --> RETURN_DRY
-    DRY_RUN -->|Tidak| RESOLVE_PATH
+        CALC_MEM_HIGH["mem_high_bytes = int(mem_bytes × 0.85)"]
+        WRITE_MEM_HIGH["2. Tulis mem_high_bytes ke memory.high<br/>(Kernel Soft-Brake)"]
 
-    RESOLVE_PATH --> PATH_FOUND
-    PATH_FOUND -->|Tidak| ABORT
-    PATH_FOUND -->|Ya| CPU_QUOTA
+        CHECK_ZRAM["3. Periksa ketersediaan zram di /sys/block/zram*/disksize"]
+        ZRAM_ACTIVE{"zram_size &gt; 0?"}
+        SET_SWAP_ZRAM["swap_limit = min(mem_bytes, zram_size)<br/>Tulis swap_limit ke memory.swap.max"]
+        SET_SWAP_ZERO["swap_limit = 0 (Cegah Disk Thrashing)<br/>Tulis '0' ke memory.swap.max"]
+    end
 
-    CPU_QUOTA -->|Tidak| WRITE_UNLIMITED
-    CPU_QUOTA -->|Ya| WRITE_LIMITED
-    WRITE_UNLIMITED --> VERIFY_CPU
-    WRITE_LIMITED --> VERIFY_CPU
+    RETURN_STATUS(["Return (cpu_ok and mem_ok)"])
 
-    VERIFY_CPU --> CPU_ERR
-    CPU_ERR -->|Ya| RETRY_CPU
-    RETRY_CPU --> MEM_RATIO
-    CPU_ERR -->|Tidak| MEM_RATIO
+    START --> CHECK_PRIO
+    CHECK_PRIO -->|Ya| SKIP_SHIELD
+    CHECK_PRIO -->|Tidak| CHECK_DRY
 
-    MEM_RATIO -->|Tidak| RETURN
-    MEM_RATIO -->|Ya| CALC_MEM
-    CALC_MEM --> WRITE_MEM
-    WRITE_MEM --> WRITE_HIGH
-    WRITE_HIGH --> ZRAM_AVAIL
+    CHECK_DRY -->|Ya| LOG_DRY
+    CHECK_DRY -->|Tidak| RESOLVE_PATH
 
-    ZRAM_AVAIL -->|Ya| SWAP_ALLOW
-    ZRAM_AVAIL -->|Tidak| SWAP_DISABLE
+    RESOLVE_PATH --> PATH_EXISTS
+    PATH_EXISTS -->|Tidak| ABORT_PATH
+    PATH_EXISTS -->|Ya| CHECK_MIN_FLOOR
 
-    SWAP_ALLOW --> RETURN
-    SWAP_DISABLE --> RETURN
+    CHECK_MIN_FLOOR -->|Ya| CLAMP_FLOOR
+    CHECK_MIN_FLOOR -->|Tidak| CHECK_UNLIMITED
+    CLAMP_FLOOR --> CHECK_UNLIMITED
+
+    CHECK_UNLIMITED -->|Ya| WRITE_MAX
+    CHECK_UNLIMITED -->|Tidak| WRITE_QUOTA
+
+    WRITE_MAX --> VALIDATE_READ
+    WRITE_QUOTA --> VALIDATE_READ
+
+    VALIDATE_READ --> VAL_MATCH
+    VAL_MATCH -->|Tidak| RETRY_CPU
+    RETRY_CPU --> CPU_SUCCESS
+    VAL_MATCH -->|Ya| CPU_SUCCESS
+
+    CPU_SUCCESS --> CHECK_MEM_COND
+    CHECK_MEM_COND -->|Tidak| MEM_BYPASS
+    CHECK_MEM_COND -->|Ya| CALC_MEM_BYTES
+
+    CALC_MEM_BYTES --> WRITE_MEM_MAX
+    WRITE_MEM_MAX --> CALC_MEM_HIGH
+    CALC_MEM_HIGH --> WRITE_MEM_HIGH
+    WRITE_MEM_HIGH --> CHECK_ZRAM
+
+    CHECK_ZRAM --> ZRAM_ACTIVE
+    ZRAM_ACTIVE -->|Ya| SET_SWAP_ZRAM
+    ZRAM_ACTIVE -->|Tidak| SET_SWAP_ZERO
+
+    MEM_BYPASS --> RETURN_STATUS
+    SET_SWAP_ZRAM --> RETURN_STATUS
+    SET_SWAP_ZERO --> RETURN_STATUS
 ```
-
-## Catatan
-
-Meskipun ini dikategorikan sebagai Tools (S1), perhatikan bahwa **nilai yang ditulis** (`cpu_quota`, `mem_ratio`) berasal dari keputusan algoritmik Layer 3. Shaper hanyalah "tangan" yang mengeksekusi perintah "otak".
 
 ---
 
@@ -84,70 +110,80 @@ Meskipun ini dikategorikan sebagai Tools (S1), perhatikan bahwa **nilai yang dit
 
 ```mermaid
 flowchart TD
-    START(["START: Inisiasi Eksekusi Cgroups"])
+    START(["START: Eksekusi Alokasi Sumber Daya cgroupfs v2"])
 
-    PENTING{"Apakah Prioritas Container<br/>Kritikal?"}
-    LINDUNGI["🛡️ Bypass Eksklusi (Infrastruktur/DB)"]
+    CEK_PRIORITAS{"Apakah Kontainer Tergolong Prioritas?<br/>(Database / Infra)"}
+    LINDUNGI["🛡️ Shield Priority Container:<br/>Bypass Kuota Keras & Cap Memori"]
 
-    SIMULASI{"Apakah DRY_RUN<br/>Mode Aktif?"}
-    CATAT["Log eksekusi (Simulasi)"]
+    CEK_SIMULASI{"Apakah Berjalan pada Mode Simulasi (DRY_RUN)?"}
+    CATAT_SIMULASI["Catat Rencana Pembatasan pada Log Sistem"]
 
-    CARI["Resolusi path cgroupfs"]
-    KETEMU{"Apakah Path<br/>Valid?"}
-    LEWATI["Abort: Inaccessible"]
+    CARI_CGROUP["Cari Direktori Unified cgroup Kontainer"]
+    CGROUP_VALID{"Direktori Ditemukan?"}
+    GAGAL_LEWAT["Abaikan: Kontainer Telah Berhenti"]
 
-    subgraph CPU["Modulasi Kuota CPU"]
-    CEK_CPU{"Apakah<br/>cpu_quota > 0?"}
-    BEBASKAN["cpu.max = 'max'<br/>(Hapus Quota)"]
-    BATASI["cpu.max = '{quota} {period}'<br/>(Terapkan Quota)"]
-    VERIFIKASI["Validasi I/O (Read-back)"]
-    GAGAL{"Apakah Terjadi<br/>I/O Error?"}
-    COBA_LAGI["Retry Tulis Ulang"]
+    subgraph PROSES_CPU["Penulisan Kuota CPU (cpu.max)"]
+        CEK_BATAS_BAWAH{"Apakah Kuota Positif Terlalu Kecil? (< 0.2 Core)"}
+        PASANG_FLOOR["Koreksi ke Batas Bawah Aman: 0.2 Core (20.000 µs)"]
+
+        CEK_LIMIT_CPU{"Apakah Kuota ≤ 0 (Unlimited)?"}
+        HAPUS_BATAS_CPU["Tulis 'max' ke cpu.max (Bebaskan Penggunaan CPU)"]
+        TERAPKAN_KUOTA_CPU["Tulis '{quota} {period}' ke cpu.max"]
+
+        VERIFIKASI_TULISAN["Baca Ulang cpu.max untuk Konfirmasi Penerapan Kernel"]
     end
 
-    subgraph RAM["Modulasi Batas Memori (Low-Priority)"]
-    PERLU_RAM{"Apakah Ada<br/>Batas Memori?"}
-    LEWAT_RAM["Bypass Modulasi RAM"]
-    HITUNG_RAM["Hitung Resolusi Memori"]
-    TULIS_RAM["Tulis memory.max"]
-    REM_PERINGATAN["Terapkan memory.high (Soft Limit)"]
-    CEK_SWAP{"Apakah ZRAM (Swap)<br/>Aktif?"}
-    IZINKAN_SWAP["memory.swap.max = limit"]
-    LARANG_SWAP["memory.swap.max = 0<br/>(Isolasi Swap)"]
+    subgraph PROSES_RAM["Penulisan Batas Memori (Hanya Non-Priority)"]
+        CEK_PERLU_RAM{"Apakah Perlu Pembatasan RAM?<br/>(Guardrail / Aggressive Non-Priority)"}
+        LEWAT_RAM["Bypass Alokasi Memori"]
+
+        HITUNG_LIMIT_RAM["Hitung Batas RAM Berdasarkan Rasio Host"]
+        TULIS_HARD_RAM["Tulis Batas Keras ke memory.max"]
+        TULIS_HIGH_RAM["Tulis Batas Lunak 85% ke memory.high (Soft-Brake)"]
+
+        CEK_KOMPRESI_SWAP{"Apakah Sistem Mendukung Swap Terkompresi zram?"}
+        PASANG_SWAP_ZRAM["Izinkan Swap Terkompresi (memory.swap.max = zram size)"]
+        ISOLASI_SWAP_NOL["Kunci Swap ke 0 (Cegah Disk Thrashing pada Hard Drive)"]
     end
 
-    SELESAI(["END: Eksekusi Cgroups Selesai"])
+    SELESAI(["END: Penerapan Alokasi Kernel Selesai"])
 
-    START --> PENTING
-    PENTING -->|Ya| LINDUNGI
-    PENTING -->|Tidak| SIMULASI
-    SIMULASI -->|Ya| CATAT
-    SIMULASI -->|Tidak| CARI
-    CARI --> KETEMU
-    KETEMU -->|Tidak| LEWATI
-    KETEMU -->|Ya| CEK_CPU
+    START --> CEK_PRIORITAS
+    CEK_PRIORITAS -->|Ya| LINDUNGI
+    CEK_PRIORITAS -->|Tidak| CEK_SIMULASI
 
-    CEK_CPU -->|Tidak| BEBASKAN
-    CEK_CPU -->|Ya| BATASI
-    BEBASKAN --> VERIFIKASI
-    BATASI --> VERIFIKASI
-    VERIFIKASI --> GAGAL
-    GAGAL -->|Ya| COBA_LAGI
-    GAGAL -->|Tidak| PERLU_RAM
-    COBA_LAGI --> PERLU_RAM
+    CEK_SIMULASI -->|Ya| CATAT_SIMULASI
+    CEK_SIMULASI -->|Tidak| CARI_CGROUP
 
-    PERLU_RAM -->|Tidak| LEWAT_RAM
-    PERLU_RAM -->|Ya| HITUNG_RAM
-    HITUNG_RAM --> TULIS_RAM
-    TULIS_RAM --> REM_PERINGATAN
-    REM_PERINGATAN --> CEK_SWAP
-    CEK_SWAP -->|Ya| IZINKAN_SWAP
-    CEK_SWAP -->|Tidak| LARANG_SWAP
+    CARI_CGROUP --> CGROUP_VALID
+    CGROUP_VALID -->|Tidak| GAGAL_LEWAT
+    CGROUP_VALID -->|Ya| CEK_BATAS_BAWAH
 
-    LEWAT_RAM --> SELESAI
-    IZINKAN_SWAP --> SELESAI
-    LARANG_SWAP --> SELESAI
+    CEK_BATAS_BAWAH -->|Ya| PASANG_FLOOR
+    CEK_BATAS_BAWAH -->|Tidak| CEK_LIMIT_CPU
+    PASANG_FLOOR --> CEK_LIMIT_CPU
+
+    CEK_LIMIT_CPU -->|Ya| HAPUS_BATAS_CPU
+    CEK_LIMIT_CPU -->|Tidak| TERAPKAN_KUOTA_CPU
+
+    HAPUS_BATAS_CPU --> VERIFIKASI_TULISAN
+    TERAPKAN_KUOTA_CPU --> VERIFIKASI_TULISAN
+
+    VERIFIKASI_TULISAN --> CEK_PERLU_RAM
+    CEK_PERLU_RAM -->|Tidak| LEWAT_RAM
+    CEK_PERLU_RAM -->|Ya| HITUNG_LIMIT_RAM
+
+    HITUNG_LIMIT_RAM --> TULIS_HARD_RAM
+    TULIS_HARD_RAM --> TULIS_HIGH_RAM
+    TULIS_HIGH_RAM --> CEK_KOMPRESI_SWAP
+
+    CEK_KOMPRESI_SWAP -->|Ya| PASANG_SWAP_ZRAM
+    CEK_KOMPRESI_SWAP -->|Tidak| ISOLASI_SWAP_NOL
+
     LINDUNGI --> SELESAI
-    CATAT --> SELESAI
-    LEWATI --> SELESAI
+    CATAT_SIMULASI --> SELESAI
+    GAGAL_LEWAT --> SELESAI
+    LEWAT_RAM --> SELESAI
+    PASANG_SWAP_ZRAM --> SELESAI
+    ISOLASI_SWAP_NOL --> SELESAI
 ```

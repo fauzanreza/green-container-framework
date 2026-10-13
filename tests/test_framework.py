@@ -202,8 +202,8 @@ def test_power_hardware_apportionment():
     # Container uses 200% CPU. Apportionment should be 40W * (200 / 400) = 20W
     assert estimate_power(200.0, 15.0, 54.0, hw_power=40.0, cpu_count=4) == 20.0
     
-    # Idle container (0% CPU). Apportionment should be 0W
-    assert estimate_power(0.0, 15.0, 54.0, hw_power=40.0, cpu_count=4) == 0.0
+    # Idle container (0% CPU). Avoid 0.0W anomaly by returning p_idle baseline
+    assert estimate_power(0.0, 15.0, 54.0, hw_power=40.0, cpu_count=4) == 15.0
 
 
 # ===== OperationMode Tests (NEW) =====

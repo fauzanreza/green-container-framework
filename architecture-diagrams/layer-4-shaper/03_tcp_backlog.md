@@ -1,138 +1,125 @@
-# Flowchart — TCPBacklogManager.verify() (Layer 4)
+# Flowchart — TCPBacklogManager (Layer 4)
 
-> **Kode Sumber:** `framework/security/tcp_backlog_manager.py` → class `TCPBacklogManager`, fungsi `verify()` (baris 67–115) dan `check_app_backlog()` (baris 128–193)
-> **Posisi di Diagram:** Layer 4 — Adaptive Resource Shaping → 4B Micro-Freezer (Safety Pre-flight)
+> **Kode Sumber:** `framework/security/tcp_backlog_manager.py` → class `TCPBacklogManager`, fungsi `verify()` dan `check_app_backlog()` (baris 24–194)
+> **Posisi di Diagram:** Layer 4 — Adaptive Resource Shaping → 4B Network-Buffer Headroom Pre-flight Verifier
 > **Kategori:** 🌟 INOVASI ALGORITMA (S2)
 
-Mekanisme verifikasi *Network-Buffer-Aware* yang memungkinkan Micro-Freezing. Memastikan bahwa selama container di-freeze (500–1000ms), koneksi HTTP/TCP baru yang masuk tidak akan di-drop oleh kernel, melainkan ditampung di antrean (backlog) sampai container di-thaw.
+Mekanisme verifikasi kapasitas antrean jaringan kernel (*Network-Buffer-Aware Verification*) yang menjadi prasyarat keamanan operasi Micro-Freezing. Memastikan bahwa saat kontainer non-priority dibekukan (500–1000ms), paket permintaan HTTP/TCP baru yang masuk tidak di-drop oleh kernel melainkan ditampung di antrean buffer soket host sampai kontainer dicairkan (<1ms).
+- **Tingkat 1 — Pre-Flight Kernel Host (`verify`):** Berjalan saat cold start `_init_security()` di `main.py`. Membaca `/proc/sys/net/core/somaxconn`. Menghitung kedalaman antrean ekspektasi $Q = \text{RPS} \times t_{\text{freeze}}$ dan membandingkannya terhadap ambang batas minimal $\max(2Q, 4096)$.
+- **Tingkat 2 — Pemeriksaan Soket Aplikasi (`check_app_backlog`):** Membaca `/proc/<pid>/net/tcp` proses kontainer untuk memastikan soket server dengan status `LISTEN` (kode hex `0A`) memiliki backlog `listen(fd, backlog)` minimal $\ge 128$.
 
 ```mermaid
 flowchart TD
-    START(["TCPBacklogManager.verify()"])
+    START_VERIFY(["TCPBacklogManager.verify()<br/>(Cold-Start Pre-flight di main.py)"])
 
-    READ_SYSCTL["Baca /proc/sys/net/core/somaxconn<br/>(host net.core.somaxconn)"]
-    SYSCTL_ERR{"I/O Error?"}
-    FALLBACK_SYSCTL["somaxconn = 128 (Default)"]
+    READ_SOMAX["Baca /proc/sys/net/core/somaxconn"]
+    READ_ERR{"I/O Error?"}
+    FALLBACK_SOMAX["somaxconn = 4096 (Default)"]
+    SOMAX_VAL["current_somaxconn tersimpan"]
 
-    CALC_EXPECTED["expected_queue = expected_rps × (max_freeze_ms/1000)<br/>(e.g. 100.0 × 1.0 = 100)"]
-    CALC_MIN["min_required = expected_queue × 2"]
+    CALC_QUEUE["freeze_seconds = max_freeze_duration_ms / 1000.0<br/>expected_queue_depth = int(expected_rps × freeze_seconds)<br/>(e.g. 100 RPS × 1.0s = 100 paket)"]
 
-    COMPARE1{"somaxconn<br/>≥ required?"}
-    HOST_LOW(["Return {safe: False,<br/>recommendation: 'increase somaxconn'}"])
+    CALC_REQ["required = max(expected_queue_depth × 2, min_headroom 4096)<br/>(Default required = 4096)"]
 
-    GET_PID["check_app_backlog(container_name, container_id)"]
-    PID_ERR{"pid > 0?"}
-    NO_PID(["Return {safe: True,<br/>recommendation: 'no_pid'}"])
+    COMPARE_HOST{"current_somaxconn<br/>≥ required?"}
+    HOST_SAFE["safe = True<br/>recommendation = 'ok'<br/>Log Info: TCP Backlog PASSED"]
+    HOST_UNSAFE["safe = False<br/>recommendation = 'sysctl -w net.core.somaxconn=...' <br/>Log Warning: TCP Backlog INSUFFICIENT"]
 
-    READ_PROC["Baca /proc/{pid}/net/tcp"]
-    PROC_ERR{"File ada?"}
-    NO_PROC(["Return {safe: True,<br/>recommendation: 'no_listen_sockets'}"])
+    RETURN_HOST(["Return dict(safe, somaxconn, required,<br/>expected_queue_depth, recommendation)"])
 
-    PARSE["Parse status 0A (LISTEN)<br/>Extract tx_queue (backlog hex)"]
+    START_APP(["check_app_backlog(name, id)<br/>(Pemeriksaan Tingkat Soket Kontainer)"])
 
-    COMPARE2{"min(tx_queue)<br/>≥ 128?"}
-    APP_LOW(["Return {safe: False,<br/>recommendation: 'app backlog too low'}"])
-    APP_OK(["Return {safe: True,<br/>recommendation: 'ok'}"])
+    GET_PID["Ambil PID kontainer via Docker attrs:<br/>pid = container.attrs['State']['Pid']"]
+    CHECK_PID{"pid &gt; 0?"}
+    PID_NOT_FOUND(["Return {safe: True, min_backlog: -1,<br/>recommendation: 'no_pid'}"])
 
-    START --> READ_SYSCTL
-    READ_SYSCTL --> SYSCTL_ERR
-    SYSCTL_ERR -->|Ya| FALLBACK_SYSCTL
-    SYSCTL_ERR -->|Tidak| CALC_EXPECTED
-    FALLBACK_SYSCTL --> CALC_EXPECTED
+    READ_TCP["Buka /proc/{pid}/net/tcp<br/>Cari baris berstatus '0A' (LISTEN)"]
+    TCP_EXISTS{"File net/tcp ada<br/>& ada soket LISTEN?"}
+    NO_SOCKETS(["Return {safe: True, min_backlog: -1,<br/>recommendation: 'no_listen_sockets'}"])
 
-    CALC_EXPECTED --> CALC_MIN
-    CALC_MIN --> COMPARE1
-    COMPARE1 -->|Tidak| HOST_LOW
-    COMPARE1 -->|Ya| GET_PID
+    PARSE_QUEUE["Parse tx_queue dari tx_queue:rx_queue (hex)<br/>lowest_backlog = min(tx_queue)"]
 
-    GET_PID --> PID_ERR
-    PID_ERR -->|Tidak| NO_PID
-    PID_ERR -->|Ya| READ_PROC
+    CHECK_APP_SAFE{"lowest_backlog<br/>≥ 128 (min_backlog)?"}
+    APP_SAFE["safe = True, recommendation = 'ok'<br/>Log Debug: App backlog PASSED"]
+    APP_UNSAFE["safe = False<br/>recommendation = 'app listen backlog too low'<br/>Log Warning: Parameter listen() terlalu kecil"]
 
-    READ_PROC --> PROC_ERR
-    PROC_ERR -->|Tidak| NO_PROC
-    PROC_ERR -->|Ya| PARSE
+    RETURN_APP(["Return dict(safe, min_backlog, recommendation)"])
 
-    PARSE --> COMPARE2
-    COMPARE2 -->|Ya| APP_OK
-    COMPARE2 -->|Tidak| APP_LOW
+    START_VERIFY --> READ_SOMAX
+    READ_SOMAX --> READ_ERR
+    READ_ERR -->|Ya| FALLBACK_SOMAX
+    READ_ERR -->|Tidak| SOMAX_VAL
+    FALLBACK_SOMAX --> CALC_QUEUE
+    SOMAX_VAL --> CALC_QUEUE
+
+    CALC_QUEUE --> CALC_REQ
+    CALC_REQ --> COMPARE_HOST
+
+    COMPARE_HOST -->|Ya| HOST_SAFE
+    COMPARE_HOST -->|Tidak| HOST_UNSAFE
+    HOST_SAFE --> RETURN_HOST
+    HOST_UNSAFE --> RETURN_HOST
+
+    START_APP --> GET_PID
+    GET_PID --> CHECK_PID
+    CHECK_PID -->|Tidak| PID_NOT_FOUND
+    CHECK_PID -->|Ya| READ_TCP
+
+    READ_TCP --> TCP_EXISTS
+    TCP_EXISTS -->|Tidak| NO_SOCKETS
+    TCP_EXISTS -->|Ya| PARSE_QUEUE
+
+    PARSE_QUEUE --> CHECK_APP_SAFE
+    CHECK_APP_SAFE -->|Ya| APP_SAFE
+    CHECK_APP_SAFE -->|Tidak| APP_UNSAFE
+    APP_SAFE --> RETURN_APP
+    APP_UNSAFE --> RETURN_APP
 ```
-
-## Mengapa Ini Inovasi S2?
-
-1. **Menyelesaikan Masalah Fundamental:** Micro-Freezing hanya berguna jika koneksi tidak putus saat container frozen. Tanpa verifikasi backlog, freeze bisa lebih merusak daripada throttling biasa.
-2. **Dua Level Verifikasi:** Sistem mengecek BAIK kernel-level (`somaxconn`) MAUPUN app-level (`listen()` backlog) — karena aplikasi yang dikompilasi dengan `listen(fd, 5)` tetap akan drop koneksi meskipun somaxconn=4096.
-3. **Matematik Kapasitas Antrean:** Secara eksplisit menghitung `expected_queue_depth = RPS × freeze_duration` — ini formula matematis yang menjembatani subsistem jaringan dengan subsistem pembekuan cgroups.
 
 ---
 
 ## Alur Logika Konseptual
 
-### Verifikasi Kapasitas Antrean Kernel (Host Level)
-
 ```mermaid
 flowchart TD
-    START(["START: Pre-flight Verifikasi TCP Backlog Host"])
+    START(["START: Verifikasi Headroom Antrean TCP"])
 
-    BACA["Baca sysctl net.core.somaxconn"]
-    GAGAL{"Apakah Terjadi<br/>I/O Error?"}
-    ASUMSI["Fallback: somaxconn = default OS"]
+    subgraph LEVEL_1["Level 1: Verifikasi Kernel Host (net.core.somaxconn)"]
+        BACA_HOST["Baca Nilai sysctl somaxconn"]
+        HITUNG_ESTIMASI["Hitung Beban Masuk Selama Kontainer Membeku:<br/>Paket Masuk = Laju Request (RPS) × Durasi Beku (detik)"]
+        HITUNG_MIN_BUFFER["Hitung Ambang Batas Aman:<br/>Ambang = max(2 × Paket Masuk, 4096)"]
+        CEK_HOST{"Apakah somaxconn Host ≥ Ambang?"}
+        HOST_OK["✅ Kernel Host Mampu Menampung Permintaan Selama Freeze"]
+        HOST_DROP["⚠ Peringatan: Risiko Paket SYN Dibuang Kernel saat Freeze"]
+    end
 
-    HITUNG_PAKET["Hitung Expected Queue:<br/>Queue = RPS × Freeze Duration"]
-    HITUNG_MINIMAL["Hitung Min Required:<br/>Min = Expected Queue × 2"]
+    subgraph LEVEL_2["Level 2: Verifikasi Parameter listen() Aplikasi"]
+        BACA_SOKET["Periksa Tabel Soket Jaringan Proses (/proc/pid/net/tcp)"]
+        CARI_LISTEN["Identifikasi Soket Aktif dalam Status LISTEN (0A)"]
+        CEK_LIMIT_APP{"Apakah Antrean Soket Aplikasi ≥ 128?"}
+        APP_OK["✅ Backlog Aplikasi Cukup Kuat"]
+        APP_DROP["⚠ Peringatan: Backlog Aplikasi Terlalu Dangkal (< 128)"]
+    end
 
-    CUKUP{"Apakah somaxconn<br/>≥ Min Required?"}
-    AMAN["✅ COMPLIANT: Kapasitas Host memadai"]
-    BAHAYA["⚠ NON-COMPLIANT: Kapasitas terlalu rendah<br/>(Risiko TCP Drop)"]
+    SELESAI(["END: Status Keamanan Penyangga Jaringan Terkonfirmasi"])
 
-    SELESAI(["END: Return Status"])
+    START --> BACA_HOST
+    BACA_HOST --> HITUNG_ESTIMASI
+    HITUNG_ESTIMASI --> HITUNG_MIN_BUFFER
+    HITUNG_MIN_BUFFER --> CEK_HOST
 
-    START --> BACA
-    BACA --> GAGAL
-    GAGAL -->|Ya| ASUMSI
-    GAGAL -->|Tidak| HITUNG_PAKET
-    ASUMSI --> HITUNG_PAKET
-    HITUNG_PAKET --> HITUNG_MINIMAL
-    HITUNG_MINIMAL --> CUKUP
-    CUKUP -->|Ya| AMAN
-    CUKUP -->|Tidak| BAHAYA
-    AMAN --> SELESAI
-    BAHAYA --> SELESAI
-```
+    CEK_HOST -->|Ya| HOST_OK
+    CEK_HOST -->|Tidak| HOST_DROP
 
-### Verifikasi Antrean Soket (Application Level)
+    HOST_OK --> BACA_SOKET
+    HOST_DROP --> BACA_SOKET
 
-```mermaid
-flowchart TD
-    START(["START: Verifikasi listen() backlog Aplikasi"])
+    BACA_SOKET --> CARI_LISTEN
+    CARI_LISTEN --> CEK_LIMIT_APP
 
-    CARI_PROSES["Get PID utama container"]
-    KETEMU{"Apakah PID<br/>Ditemukan?"}
-    LEWATI(["END: Abort, Namespace Inaccessible"])
+    CEK_LIMIT_APP -->|Ya| APP_OK
+    CEK_LIMIT_APP -->|Tidak| APP_DROP
 
-    BACA_PINTU["Baca /proc/{pid}/net/tcp<br/>Cari status 0A (LISTEN)"]
-    ADA_PINTU{"Apakah Ada Soket<br/>Berstatus LISTEN?"}
-    TIDAK_ADA(["END: Abort, Tidak ada layanan network"])
-
-    CARI_TERKECIL["Identifikasi tx_queue (backlog) terkecil"]
-    CUKUP{"Apakah Kapasitas<br/>≥ 128?"}
-
-    APP_AMAN["✅ COMPLIANT: Backlog memadai"]
-    APP_KECIL["⚠ NON-COMPLIANT: Parameter listen() terlalu kecil"]
-
-    SELESAI(["END: Return Status"])
-
-    START --> CARI_PROSES
-    CARI_PROSES --> KETEMU
-    KETEMU -->|Tidak| LEWATI
-    KETEMU -->|Ya| BACA_PINTU
-    BACA_PINTU --> ADA_PINTU
-    ADA_PINTU -->|Tidak| TIDAK_ADA
-    ADA_PINTU -->|Ya| CARI_TERKECIL
-    CARI_TERKECIL --> CUKUP
-    CUKUP -->|Ya| APP_AMAN
-    CUKUP -->|Tidak| APP_KECIL
-
-    APP_AMAN --> SELESAI
-    APP_KECIL --> SELESAI
+    APP_OK --> SELESAI
+    APP_DROP --> SELESAI
 ```
