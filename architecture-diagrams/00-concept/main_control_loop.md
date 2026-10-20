@@ -14,14 +14,13 @@ HECF bekerja secara periodik seperti "satpam patroli cerdas" berbasis model **MA
 
 ```mermaid
 flowchart LR
-    P0["<b>Fase 0: Cold-Start</b><br/>Deteksi Server & Modul<br/><i>(1× di awal)</i>"] --> P1["<b>Fase 1: Monitor</b><br/>Bangun tidur & baca data<br/>CPU/RAM cgroupfs v2"]
-    P1 --> P2["<b>Fase 2: Analyze & Plan</b><br/>Tiering, Tren EMA,<br/>Guardrail, & Mode"]
-    P2 --> P3["<b>Fase 3: Execute</b><br/>Set cgroup cpu.max<br/>atau Micro-Freeze"]
-    P3 --> P4["<b>Fase 4: Knowledge & Sleep</b><br/>Tulis metrics.csv &<br/>Tidur 10s/30s (Hemat Daya)"]
+    P0["<b>Fase 0: Cold-Start</b><br/>Deteksi Server & Modul<br/><i>(1x di awal)</i>"]:::phase --> P1["<b>Fase 1: Monitor</b><br/>Bangun tidur & baca data<br/>CPU/RAM cgroupfs v2"]:::phase
+    P1 --> P2["<b>Fase 2: Analyze & Plan</b><br/>Tiering, Tren EMA,<br/>Guardrail, & Mode"]:::phase
+    P2 --> P3["<b>Fase 3: Execute</b><br/>Set cgroup cpu.max<br/>atau Micro-Freeze"]:::phase
+    P3 --> P4["<b>Fase 4: Knowledge & Sleep</b><br/>Tulis metrics.csv &<br/>Tidur 10s/30s (Hemat Daya)"]:::phase
     P4 -->|Siklus Patroli Berikutnya| P1
 
     classDef phase fill:#e8f4fd,stroke:#2b6cb0,stroke-width:2px,color:#1a365d;
-    class P0,P1,P2,P3,P4 phase;
 ```
 
 ---
@@ -36,7 +35,7 @@ flowchart TD
     COLD_START --> LOOP_START(["Mulai Siklus Patroli (While True)"])
 
     %% FASE 1: MONITOR
-    subgraph FASE_MONITOR ["Fase 1: Pengamatan & Pengambilan Data (Monitor)"]
+    subgraph FASE_MONITOR["Fase 1: Pengamatan & Pengambilan Data (Monitor)"]
         SLEEP["Adaptive Sleep: Tidur sejenak<br/>10s jika sibuk, 30s jika tenang"]
         DISCOVER["Service Discovery: Cari kontainer aktif sesuai Whitelist"]
         CEK_TARGET{"Ada Target Aktif?"}
@@ -54,7 +53,7 @@ flowchart TD
     CEK_STALE -->|Data Rusak| SKIP_STALE
 
     %% FASE 2: ANALYZE & PLAN
-    subgraph FASE_ANALYZE ["Fase 2: Analisis Cerdas & Rencana (Analyze & Plan)"]
+    subgraph FASE_ANALYZE["Fase 2: Analisis Cerdas & Rencana (Analyze & Plan)"]
         TIER["Tier Detector: Evaluasi stabilitas beban (P95/P50)"]
         EMA["EMA Predictor: Prediksi tren beban ke depan (alpha=0.2)"]
         GUARDRAIL_CHECK{"Beban Darurat?<br/>CPU di atas 80% atau RAM di atas 90%<br/>pada 3 dari 5 sampel"}
@@ -73,7 +72,7 @@ flowchart TD
     BURST_CHECK -->|Tidak: Normal| PLAN_TIER
 
     %% FASE 3: EXECUTE
-    subgraph FASE_EXECUTE ["Fase 3: Eksekusi Alokasi Resource (Execute)"]
+    subgraph FASE_EXECUTE["Fase 3: Eksekusi Alokasi Resource (Execute)"]
         IDLE_CHECK{"Kontainer Menganggur?<br/>Idle tanpa request"}
         ACTION_FREEZE["❄️ Micro-Freeze Kontainer<br/>+ Reclaim memory (Daya ke 0 Watt)"]
         ACTION_SHAPE["Tulis Jatah Kuota ke Kernel<br/>via cgroupfs cpu.max"]
@@ -86,7 +85,7 @@ flowchart TD
     IDLE_CHECK -->|Tidak: Aktif| ACTION_SHAPE
 
     %% FASE 4: KNOWLEDGE & POST-LOOP
-    subgraph FASE_KNOWLEDGE ["Fase 4: Telemetri & Penyesuaian Siklus (Knowledge)"]
+    subgraph FASE_KNOWLEDGE["Fase 4: Telemetri & Penyesuaian Siklus (Knowledge)"]
         HITUNG_DAYA["Estimasi Konsumsi Daya (Watt) & Energi (kWh)"]
         TULIS_CSV["Catat 16 Kolom Telemetri ke metrics.csv"]
         EVAL_INTERVAL{"Ada kondisi darurat /<br/>beban CPU di atas 60%?"}
@@ -117,7 +116,7 @@ flowchart TD
 
     INIT --> LOOP_START(["WHILE TRUE: Loop Polling"])
 
-    subgraph PRE_LOOP ["1. Persiapan Siklus Patroli"]
+    subgraph PRE_LOOP["1. Persiapan Siklus Patroli"]
         CHECK_ACTIVE["Baca status toggle Dashboard (is_active)"]
         SLEEP_NODE["time.sleep(current_interval)<br/>10s saat beban tinggi, 30s saat normal"]
         READ_HW["Baca daya riil via hw_sensor.get_power_watts()"]
@@ -135,7 +134,7 @@ flowchart TD
     NO_TARGET -->|Ya| SLEEP_NODE
     NO_TARGET -->|Tidak| CONTAINER_LOOP
 
-    subgraph PER_CONTAINER ["2. Evaluasi per Target Kontainer"]
+    subgraph PER_CONTAINER["2. Evaluasi per Target Kontainer"]
         CONTAINER_LOOP(["FOR EACH target container"])
         
         ZOMBIE_CHECK{"ZombieHealer:<br/>Perlu restart?"}
@@ -153,7 +152,7 @@ flowchart TD
         BRANCH_STATIC["static_cap:<br/>action = STATIC, quota = 80% (80000)"]
         BRANCH_REACTIVE["reactive_only:<br/>Jika Guardrail aktif → quota 80%<br/>Jika normal → quota unlimited"]
 
-        subgraph FULL_HECF_LOGIC ["Mode: full_hecf (Sistem yang Diajukan)"]
+        subgraph FULL_HECF_LOGIC["Mode: full_hecf (Sistem yang Diajukan)"]
             GR_CHECK{"Guardrail aktif?<br/>3-of-5 overload"}
             DO_GR["action = GUARDRAIL<br/>quota = 80%, mem_ratio = 70%"]
             SPIKE_CHECK{"spike_ratio di atas 1.5?<br/>Burst traffic"}
@@ -164,7 +163,7 @@ flowchart TD
             DO_T3["Tier 3: SOFT (quota unlimited)"]
         end
 
-        subgraph FREEZE_LOGIC ["Layer 4 Ext: Micro-Freezer"]
+        subgraph FREEZE_LOGIC["Layer 4 Ext: Micro-Freezer"]
             MF_EVAL["micro_freezer.evaluate():<br/>Cek prioritas, idle counter, & traffic"]
             MF_RES{"Keputusan?"}
             DO_FREEZE["action = MICRO_FREEZE<br/>quota = unlimited, memory.reclaim"]
@@ -216,7 +215,7 @@ flowchart TD
     APPLY_CGROUP --> EST_ENERGY
     EST_ENERGY --> APPEND_ROW
 
-    subgraph POST_LOOP ["3. Pasca-Loop: Telemetri & Penyesuaian"]
+    subgraph POST_LOOP["3. Pasca-Loop: Telemetri & Penyesuaian"]
         CSV_WRITE["_write_csv_atomic(): Tulis seluruh baris ke metrics.csv"]
         CLEANUP["Cleanup: Hapus cache state kontainer yang sudah mati"]
         ESCALATED_CHECK{"Ada kontainer berstatus<br/>GUARDRAIL / AGGRESSIVE /<br/>BALANCED / EDOS_FREEZE?"}
