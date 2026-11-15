@@ -174,21 +174,25 @@ the deployment environment:
 - **Hardware-True Mode (bare-metal):** if Layer 1 detects Intel RAPL or AMD energy
   counters, the estimator reads real Joules from the motherboard and uses
   **Proportional Power Apportionment** to attribute power per container based on
-  CPU usage share.
+  CPU usage share, plus active container memory footprint ($P_{\text{dram}}$).
 
 - **Software Estimation Mode (cloud VPS / virtualized):** if hardware sensors are
-  blocked, falls back to the validated linear model (Jarus et al., 2014, <4% error):
+  blocked, uses an **Additive Multi-Component Model** accounting for both CPU compute
+  and active DRAM footprint (Jarus et al., 2014 for CPU + Kansal et al. / CNCF Kepler for DRAM):
 
   ```text
-  P(t) = P_idle + (P_max - P_idle) × CPU_utilization(t)
+  P_total(t) = P_cpu(t) + P_dram(t)
+  P_cpu(t)   = P_idle + (P_max - P_idle) × CPU_utilization(t)
+  P_dram(t)  = RAM_used_GB(t) × C_dram
   ```
 
+  Where $C_{\text{dram}} = 0.38\text{ W/GB}$ (Micron / JEDEC standard for DDR3/DDR4) and
   `P_idle` and `P_max` are dynamically computed from the host's physical CPU core
   count (`cpu_count × 3.75W` and `cpu_count × 13.5W` respectively), making the
   model self-calibrating for the actual hardware environment.
 
 - **Micro-Frozen Container Power:** When a container is micro-frozen (`is_frozen=True`),
-  the estimator returns `p_idle` as the container baseline footprint, avoiding zero-value anomalies
+  the estimator returns `p_idle + P_dram(t)` as the container baseline footprint (CPU is idle, but allocated DRAM continues to require active refresh and retention power), avoiding zero-value anomalies
   that can disrupt dataset processing in environments without physical power sensors.
 
 - **Output:** Joule and kWh only. **No carbon/CO2e conversion of any kind** —

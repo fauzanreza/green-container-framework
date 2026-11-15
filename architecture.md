@@ -258,21 +258,27 @@ Watts = ΔJoules / ΔTime
 
 Because hardware sensors report total CPU package power (not per-container),
 **Proportional Power Apportionment** is used to attribute power to individual
-containers:
+containers, supplemented with active container memory footprint:
 
 ```text
-Container_Power = Total_HW_Watts × (Container_CPU% / Total_CPU_Capacity)
+Container_Power = Total_HW_Watts × (Container_CPU% / Total_CPU_Capacity) + P_dram(t)
 ```
 
 **Tier B — Software Estimation Mode (cloud VPS / virtualized environments):**
 
 If hardware sensors are blocked by the hypervisor (as is common on rented cloud
-VPS), the estimator falls back to the validated linear CPU-to-power model
-(Jarus et al., 2014, error <4%):
+VPS), the estimator employs an **Additive Multi-Component Model** that accounts for both
+CPU compute and active DRAM memory footprint (combining Jarus et al., 2014 for CPU and Kansal et al. / CNCF Kepler for DRAM):
 
 ```text
-P(t) = P_idle + (P_max - P_idle) × CPU_utilization(t)
+P_total(t) = P_cpu(t) + P_dram(t)
+P_cpu(t)   = P_idle + (P_max - P_idle) × CPU_utilization(t)
+P_dram(t)  = RAM_used_GB(t) × C_dram
 ```
+
+Where:
+- `C_dram = 0.38 W/GB` (DRAM active power draw coefficient derived from Micron and JEDEC DDR3/DDR4 specifications).
+- `RAM_used_GB(t)` is the container's active working set memory from cgroup v2 (`memory.current - inactive_file`).
 
 `P_idle` and `P_max` are calculated dynamically from Layer 1's hardware profile
 using a per-core multiplier:
@@ -283,7 +289,7 @@ P_max  = cpu_count × 13.5W
 ```
 
 **Frozen Container Power Handling:** When a container is micro-frozen (`is_frozen=True`),
-the estimator returns `p_idle` as the container baseline footprint, avoiding zero-value anomalies
+the estimator returns `p_idle + P_dram(t)` as the container baseline footprint (CPU is idle, but allocated DRAM continues to require active refresh and retention power), avoiding zero-value anomalies
 that can disrupt dataset processing in environments without physical power sensors.
 
 **Output units:** Joule and kWh only. **No carbon/CO2e conversion of any kind.**

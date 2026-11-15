@@ -205,6 +205,40 @@ def test_power_hardware_apportionment():
     # Idle container (0% CPU). Avoid 0.0W anomaly by returning p_idle baseline
     assert estimate_power(0.0, 15.0, 54.0, hw_power=40.0, cpu_count=4) == 15.0
 
+def test_power_with_memory():
+    from framework.config import P_IDLE_WATTS, P_MAX_WATTS, P_DRAM_WATTS_PER_GB
+    one_gb = 1024 ** 3
+    # 0% CPU + 1GB RAM = 15.0 + 0.38 = 15.38W
+    expected = round(P_IDLE_WATTS + 1.0 * P_DRAM_WATTS_PER_GB, 3)
+    assert estimate_power(0.0, P_IDLE_WATTS, P_MAX_WATTS, memory_bytes=one_gb) == expected
+
+    # 100% CPU + 2GB RAM = 54.0 + (2 * 0.38) = 54.76W
+    two_gb = 2 * (1024 ** 3)
+    expected_max = round(P_MAX_WATTS + 2.0 * P_DRAM_WATTS_PER_GB, 3)
+    assert estimate_power(100.0, P_IDLE_WATTS, P_MAX_WATTS, memory_bytes=two_gb) == expected_max
+
+def test_power_hardware_apportionment_with_memory():
+    two_gb = 2 * (1024 ** 3)
+    # HW apportionment: 40W * (100 / 400) = 10W CPU + 2 * 0.38W RAM = 10.76W
+    power = estimate_power(100.0, 15.0, 54.0, hw_power=40.0, cpu_count=4, memory_bytes=two_gb)
+    assert power == 10.76
+
+def test_power_frozen_with_memory():
+    one_gb = 1024 ** 3
+    # Frozen container keeps baseline host CPU (15W) + active RAM retention (0.38W)
+    assert estimate_power(0.0, 15.0, 54.0, is_frozen=True, memory_bytes=one_gb) == 15.38
+
+def test_estimate_all_dram_breakdown():
+    from framework.config import P_IDLE_WATTS, P_MAX_WATTS
+    two_gb = 2 * (1024 ** 3)
+    result = estimate_all(50.0, 10, P_IDLE_WATTS, P_MAX_WATTS, memory_bytes=two_gb)
+    assert "power_watt" in result
+    assert "energy_kwh" in result
+    assert "p_cpu_watt" in result
+    assert "p_dram_watt" in result
+    assert result["p_dram_watt"] == 0.76
+    assert result["power_watt"] == round(result["p_cpu_watt"] + result["p_dram_watt"], 3)
+
 
 # ===== OperationMode Tests (NEW) =====
 

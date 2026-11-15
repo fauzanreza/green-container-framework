@@ -35,9 +35,11 @@ PSI_SOME_AVG10_THRESHOLD = float(os.getenv("HECF_PSI_THRESHOLD", 25.0))
 # === Memory Soft-Brake (Gap #9) ===
 MEMORY_HIGH_RATIO        = float(os.getenv("HECF_MEMORY_HIGH_RATIO", 0.85))
 
-# === Energy Estimation ===
+# === Energy Estimation (Additive CPU + RAM Model) ===
+# Ref: Jarus et al. (2014) for CPU; Kansal et al. (Joulemeter) & CNCF Kepler for DRAM
 P_IDLE_WATTS             = float(os.getenv("HECF_P_IDLE_WATTS", 15.0))
 P_MAX_WATTS              = float(os.getenv("HECF_P_MAX_WATTS", 54.0))
+P_DRAM_WATTS_PER_GB      = float(os.getenv("HECF_P_DRAM_WATTS_PER_GB", 0.38))
 
 # === EMA Pre-Warning (Layer 3C → 3A integration) ===
 # When EMA prediction is within this margin of the guardrail threshold,

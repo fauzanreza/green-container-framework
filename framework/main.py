@@ -47,6 +47,7 @@ from .config        import (
     IMAGE_SIGNING_REQUIRED,
     ENCRYPTION_MODE,
     SOMAXCONN_MIN_HEADROOM,
+    P_DRAM_WATTS_PER_GB,
 )
 
 # === Logging setup ===
@@ -439,11 +440,13 @@ def main():
                     host_mem_bytes=host_mem_bytes,
                 )
 
-            # Energy Estimator (S3: frozen containers consume 0W)
+            # Energy Estimator (Additive CPU + DRAM model)
             energy_data = estimate_all(
                 cpu, current_interval, p_idle, p_max,
                 hw_power=total_hw_power, cpu_count=cpu_count,
-                is_frozen=is_currently_frozen
+                is_frozen=is_currently_frozen,
+                memory_bytes=stats.get("mem_usage", 0),
+                p_dram_per_gb=P_DRAM_WATTS_PER_GB
             )
 
             # Logging
