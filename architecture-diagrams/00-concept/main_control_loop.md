@@ -167,12 +167,15 @@ Di penghujung evaluasi tiap aplikasi, HECF menghitung estimasi daya listrik (dal
 
 ## 4. Detail Teknis Kode Aktual (`framework/main.py`)
 
-Diagram di bawah memetakan alur kode aktual di `framework/main.py` beserta keempat mode operasional eksperimen (`default_docker`, `static_cap`, `reactive_only`, dan mode utama `full_hecf`) serta titik integrasi ekstensi keamanan opsional.
+Diagram di bawah memetakan alur kode aktual di `framework/main.py` ke dalam empat fase berwarna, beserta mode operasional eksperimen (`default_docker`, `static_cap`, `reactive_only`, dan `full_hecf`) serta titik integrasi ekstensi keamanan opsional.
 
 ```mermaid
 %%{init: {'flowchart': {'wrappingWidth': 240, 'padding': 18, 'nodeSpacing': 34, 'rankSpacing': 44, 'curve': 'linear'}}}%%
 flowchart TD
-    START(["<b>START</b><br/>python -m framework.main"]) --> INIT["<b>Inisialisasi</b><br/>profile_host(), _init_security(),<br/>init metrics.csv &amp; komponen"]
+    START(["<b>START</b><br/>python -m framework.main"])
+
+    subgraph PHASE_MONITOR["Fase 1: Pengamatan &amp; Pengambilan Data (Monitor)"]
+    INIT["<b>Inisialisasi</b><br/>profile_host(), _init_security(),<br/>init metrics.csv &amp; komponen"]
     INIT --> SLEEP["time.sleep(current_interval)"]
     SLEEP --> DISC["discover_containers() +<br/>HECF_TARGETS + security_gates"]
     DISC --> NT{"targets_meta<br/>kosong?"}
@@ -184,6 +187,9 @@ flowchart TD
     ZH -->|Tidak| STATS["monitor.get_stats(name, cid)"]
     STATS --> ST{"stats.stale?"}
     ST -->|Ya: continue| NEXT
+    end
+
+    subgraph PHASE_ANALYZE["Fase 2: Analisis &amp; Rencana (Analyze &amp; Plan)"]
     ST -->|Tidak| L3["tier_detector + predictor (EMA α=0.2)<br/>+ guardrail.update() (3-of-5 + PSI)"]
 
     L3 --> MODE{"OperationMode<br/>(MODE / is_active)"}
@@ -198,10 +204,15 @@ flowchart TD
     TI -->|1| T1["AGGRESSIVE<br/>0.8 core, mem 80%"]
     TI -->|2| T2["BALANCED<br/>0.9 core"]
     TI -->|3| T3["SOFT<br/>(unlimited)"]
+    end
 
+    subgraph PHASE_EXECUTE["Fase 3: Eksekusi Alokasi Sumber Daya (Execute)"]
     OBS & STA & REA & DGR & DPS & T1 & T2 & T3 --> MF{"micro_freezer<br/>.evaluate()"}
     MF -->|freeze| FRZ["MICRO_FREEZE<br/>+ reclaim_memory()"]
     MF -->|normal / thaw| SHP["shape_container()<br/>cpu.max, memory.*"]
+    end
+
+    subgraph PHASE_KNOWLEDGE["Fase 4: Telemetri &amp; Penyesuaian Siklus (Knowledge)"]
     FRZ --> EN["estimate_all() + append csv_rows"]
     SHP --> EN
     EN --> NEXT{"Container<br/>berikutnya?"}
@@ -212,8 +223,16 @@ flowchart TD
     ESC -->|Tidak| ADP["get_adaptive_interval()<br/>CPU ≥ 60%: 10s, else 30s"]
     FAST --> STOP{"Sinyal Stop /<br/>SIGTERM?"}
     ADP --> STOP
+    end
+
     STOP -->|Tidak| SLEEP
     STOP -->|Ya| END_NODE(["<b>END</b><br/>Proses Berhenti"])
+    START --> INIT
+
+    style PHASE_MONITOR fill:#eff6ff,stroke:#2b6cb0,stroke-width:2px,color:#1a365d
+    style PHASE_ANALYZE fill:#fffaf0,stroke:#c05621,stroke-width:2px,color:#7b341e
+    style PHASE_EXECUTE fill:#f0fff4,stroke:#2f855a,stroke-width:2px,color:#22543d
+    style PHASE_KNOWLEDGE fill:#faf5ff,stroke:#6b46c1,stroke-width:2px,color:#44337a
 ```
 
 > **Catatan Teknis Implementasi:**
