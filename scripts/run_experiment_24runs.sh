@@ -21,29 +21,34 @@ echo "block,run_idx,mode,rapl_start_uj,rapl_end_uj,rapl_kwh,mean_rt_ms,p95_rt_ms
 MODES=("default_docker" "static_cap" "reactive_only" "full_hecf")
 TARGET="bench-json"
 
-# Deteksi path RAPL
-RAPL_PATH=""
-for p in /sys/class/powercap/intel-rapl:0/energy_uj /sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj; do
-    if [ -r "$p" ]; then
-        RAPL_PATH="$p"
-        break
-    fi
-done
-
-if [ -z "$RAPL_PATH" ]; then
-    echo "[WARN] RAPL tidak terbaca tanpa sudo. Mencoba dengan sudo..."
-    RAPL_CMD="sudo cat /sys/class/powercap/intel-rapl:0/energy_uj"
+# Deteksi otomatis apakah docker-compose utama ada di ../portfolio-app
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GCF_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+if [ -f "$GCF_DIR/../portfolio-app/docker-compose.yml" ]; then
+    COMPOSE_FILE="$GCF_DIR/../portfolio-app/docker-compose.yml"
+    echo "[INFO] Menggunakan docker-compose utama: $COMPOSE_FILE (network: portfolio-network)"
 else
-    RAPL_CMD="cat $RAPL_PATH"
+    COMPOSE_FILE="$GCF_DIR/docker-compose.yml"
+    echo "[INFO] Menggunakan docker-compose lokal: $COMPOSE_FILE"
 fi
 
+cd "$GCF_DIR"
+
+# Deteksi path RAPL (baca via docker exec hecf karena container hecf privileged dan tidak butuh prompt sudo)
 read_rapl() {
-    eval "$RAPL_CMD" 2>/dev/null || echo "0"
+    docker exec hecf cat /sys/class/powercap/intel-rapl:0/energy_uj 2>/dev/null \
+        || docker exec hecf cat /sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj 2>/dev/null \
+        || cat /sys/class/powercap/intel-rapl:0/energy_uj 2>/dev/null \
+        || echo "0"
 }
 
 read_nr_throttled() {
     local cid
-    cid=$(docker inspect -f '{{.Id}}' "$TARGET")
+    cid=$(docker inspect -f '{{.Id}}' "$TARGET" 2>/dev/null || echo "")
+    if [ -z "$cid" ]; then
+        echo "0"
+        return
+    fi
     local cg="/sys/fs/cgroup/system.slice/docker-${cid}.scope/cpu.stat"
     if [ -f "$cg" ]; then
         awk '/nr_throttled/ {print $2}' "$cg"
@@ -54,15 +59,19 @@ read_nr_throttled() {
 
 reset_target_cgroup() {
     local cid
-    cid=$(docker inspect -f '{{.Id}}' "$TARGET")
-    local cg="/sys/fs/cgroup/system.slice/docker-${cid}.scope"
-    if [ -d "$cg" ]; then
-        sudo sh -c "echo 'max 100000' > $cg/cpu.max" 2>/dev/null || true
-        sudo sh -c "echo '0' > $cg/cgroup.freeze" 2>/dev/null || true
+    cid=$(docker inspect -f '{{.Id}}' "$TARGET" 2>/dev/null || echo "")
+    if [ -n "$cid" ]; then
+        local cg="/sys/fs/cgroup/system.slice/docker-${cid}.scope"
+        # Gunakan container hecf (privileged) untuk menulis ke cgroupfs tanpa butuh sudo di host
+        docker exec hecf sh -c "echo 'max 100000' > $cg/cpu.max" 2>/dev/null || true
+        docker exec hecf sh -c "echo '0' > $cg/cgroup.freeze" 2>/dev/null || true
     fi
 }
 
-echo '["bench-json"]' > targets.json
+echo '["bench-json"]' > "$GCF_DIR/targets.json"
+
+# Pastikan container bench-json dan hecf berjalan dari COMPOSE_FILE utama (portfolio-app)
+docker compose -f "$COMPOSE_FILE" up -d hecf bench-json >/dev/null 2>&1 || true
 
 run_counter=0
 for block in $(seq 1 6); do
@@ -80,18 +89,26 @@ for block in $(seq 1 6); do
 
         # 1. Reset state & Manipulation Check
         reset_target_cgroup
-        rm -f metrics.csv locustfiles/results_*.csv
+        echo '["bench-json"]' > "$GCF_DIR/targets.json"
+        # Kosongkan file metrics.csv secara in-place (JANGAN rm -f karena sedang di-bind-mount!)
+        : > "$GCF_DIR/metrics.csv"
+        rm -f "$GCF_DIR"/locustfiles/results_*.csv
         
-        # Set mode & restart HECF
+        # Set mode & recreate HECF menggunakan COMPOSE_FILE utama (portfolio-app) tanpa menyentuh container lain
         export HECF_MODE="$mode"
-        docker compose up -d --force-recreate hecf >/dev/null 2>&1
+        if ! HECF_MODE="$mode" docker compose -f "$COMPOSE_FILE" up -d --no-deps --force-recreate hecf >/dev/null 2>&1; then
+            echo "[WARN] Force-recreate hecf butuh hapus container lama..."
+            docker rm -f hecf >/dev/null 2>&1 || true
+            HECF_MODE="$mode" docker compose -f "$COMPOSE_FILE" up -d --no-deps hecf
+        fi
         sleep 5
 
-        # Manipulation check: pastikan endpoint HTTP 200
+        # Manipulation check: pastikan bench-json berjalan di network yang sama dan merespons HTTP 200
         HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/ || echo "000")
         if [ "$HTTP_CODE" != "200" ]; then
-            echo "[ERROR] Manipulation check gagal! bench-json mengembalikan HTTP $HTTP_CODE"
-            docker restart "$TARGET"
+            echo "[WARN] Manipulation check HTTP $HTTP_CODE — menyalakan ulang bench-json di $COMPOSE_FILE..."
+            docker rm -f "$TARGET" >/dev/null 2>&1 || true
+            docker compose -f "$COMPOSE_FILE" up -d --no-deps "$TARGET"
             sleep 5
         fi
 
@@ -101,25 +118,25 @@ for block in $(seq 1 6); do
         # 2. Jalankan 4 Fase Beban (Total 16 menit = 4 x 4m; dapat dioverride dengan PHASE_DURATION, misal 4m)
         PHASE_DUR="${PHASE_DURATION:-4m}"
 
-        # Fase 1: Idle (4 menit) - tanpa Locust ताकि Micro-Freeze bisa terpicu di full_hecf
+        # Fase 1: Idle (4 menit) - tanpa Locust agar Micro-Freeze bisa terpicu di full_hecf
         echo "  - Fase 1/4: Idle ($PHASE_DUR)..."
         sleep "$PHASE_DUR"
 
         # Fase 2: Steady 25-35% host CPU (4 menit) -> ~30 users
         echo "  - Fase 2/4: Steady Load ($PHASE_DUR)..."
-        docker compose run --rm -T locust-master \
+        docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T -e WORKLOAD_TYPE=json locust-master \
             -f /mnt/locust/locustfile.py --host http://bench-json:8000 \
             --headless -u 30 -r 5 -t "$PHASE_DUR" --csv="/mnt/locust/${RUN_ID}_steady" >/dev/null 2>&1 || true
 
         # Fase 3: Microburst 25-72% host CPU (4 menit) -> ~100 users
         echo "  - Fase 3/4: Microburst Load ($PHASE_DUR)..."
-        docker compose run --rm -T locust-master \
+        docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T -e WORKLOAD_TYPE=json locust-master \
             -f /mnt/locust/locustfile.py --host http://bench-json:8000 \
             --headless -u 100 -r 25 -t "$PHASE_DUR" --csv="/mnt/locust/${RUN_ID}_burst" >/dev/null 2>&1 || true
 
         # Fase 4: Overload 85-95% host CPU (4 menit) -> ~220 users
         echo "  - Fase 4/4: Overload ($PHASE_DUR)..."
-        docker compose run --rm -T locust-master \
+        docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T -e WORKLOAD_TYPE=json locust-master \
             -f /mnt/locust/locustfile.py --host http://bench-json:8000 \
             --headless -u 220 -r 40 -t "$PHASE_DUR" --csv="/mnt/locust/${RUN_ID}_overload" >/dev/null 2>&1 || true
 
