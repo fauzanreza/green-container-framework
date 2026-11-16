@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
 """
 scripts/analyze_24runs.py
-Evaluasi Statistik Eksperimen 24 Run (6 Blok x 4 Mode) — 100% Python Standard Library!
-Tidak membutuhkan numpy/scipy/pandas di host OS sehingga dijamin berjalan di server mana pun.
-Menghitung:
-- Mean, SD, 95% Confidence Interval per mode
-- Paired Wilcoxon Signed-Rank Test (exact distribution untuk N=6 pasang blok)
-- Cohen's d effect size (paired d_z)
-- Holm-Bonferroni p-value adjustment untuk multiple comparisons
-- Evaluasi klaim H1 & H2
+Evaluasi Statistik Eksperimen RCBD (Stage B 24 Run / Stage B+ 72 Run) — 100% Python Standard Library!
+Selain mencetak hasil ke terminal, script ini otomatis menghasilkan di dalam folder sesi:
+1. statistical_report.md  (Tabel statistik lengkap, ELP, evaluasi Gate 2, dan perbandingan BrownoutCon)
+2. analysis_summary.ipynb (Jupyter Notebook interaktif untuk eksplorasi & grafik tesis Bab IV)
 """
 
+import os
 import sys
 import csv
+import json
 import math
 from collections import defaultdict
 
@@ -31,11 +29,8 @@ def std_sample(arr: list[float]) -> float:
 
 
 def wilcoxon_signed_rank_exact(x: list[float], y: list[float]) -> tuple[float, float]:
-    """
-    Exact two-sided Paired Wilcoxon Signed-Rank Test using 100% Python stdlib.
-    Ideal for small paired block designs (e.g. N=6 blocks).
-    """
-    d = [ float(xi) - float(yi) for xi, yi in zip(x, y) if (float(xi) - float(yi)) != 0.0 ]
+    """Exact two-sided Paired Wilcoxon Signed-Rank Test using 100% Python stdlib."""
+    d = [float(xi) - float(yi) for xi, yi in zip(x, y) if (float(xi) - float(yi)) != 0.0]
     n = len(d)
     if n == 0:
         return 0.0, 1.0
@@ -58,7 +53,6 @@ def wilcoxon_signed_rank_exact(x: list[float], y: list[float]) -> tuple[float, f
     w_stat = min(w_pos, w_neg)
     total_rank_sum = sum(ranks)
 
-    # Exact enumeration over 2^n sign assignments
     total_configs = 1 << n
     extreme_count = 0
     for mask in range(total_configs):
@@ -115,61 +109,211 @@ def holm_adjust(p_values: list[float]) -> list[float]:
     return adjusted
 
 
+def generate_rcbd_notebook(session_dir: str):
+    """Generate analysis_summary.ipynb inside session_dir for Jupyter/Colab visualization."""
+    nb = {
+        "cells": [
+            {
+                "cell_type": "markdown",
+                "metadata": {},
+                "source": [
+                    "# 📊 HECF Experiment Analysis (RCBD: Stage B / Stage B+)\n",
+                    "Notebook ini di-generate otomatis dari hasil eksperimen di folder sesi ini.\n",
+                    "Struktur direktori sesi: `<mode>/json/block_<1..6>/rep_<1..R>/` beserta `summary_all_runs.csv`."
+                ]
+            },
+            {
+                "cell_type": "code",
+                "execution_count": None,
+                "metadata": {},
+                "outputs": [],
+                "source": [
+                    "import os, glob\n",
+                    "import pandas as pd\n",
+                    "import matplotlib.pyplot as plt\n",
+                    "import seaborn as sns\n\n",
+                    "sns.set_theme(style='whitegrid')\n",
+                    "plt.rcParams['figure.figsize'] = (11, 6)\n",
+                    "df = pd.read_csv('summary_all_runs.csv')\n",
+                    "df['elp'] = df['target_kwh'] * df['p95_rt_ms']\n",
+                    "display(df.head(10))"
+                ]
+            },
+            {
+                "cell_type": "markdown",
+                "metadata": {},
+                "source": [
+                    "## 1. Ringkasan Metrik per Mode (Mean ± SD)"
+                ]
+            },
+            {
+                "cell_type": "code",
+                "execution_count": None,
+                "metadata": {},
+                "outputs": [],
+                "source": [
+                    "summary = df.groupby('mode')[['target_kwh', 'rapl_pkg_kwh', 'mean_rt_ms', 'p95_rt_ms', 'rps', 'fail_count', 'overhead_cpu_pct', 'freeze_sec', 'elp']].agg(['mean', 'std'])\n",
+                    "display(summary)"
+                ]
+            },
+            {
+                "cell_type": "markdown",
+                "metadata": {},
+                "source": [
+                    "## 2. Grafik Perbandingan Konsumsi Energi (kWh) & Latensi P95 (ms)"
+                ]
+            },
+            {
+                "cell_type": "code",
+                "execution_count": None,
+                "metadata": {},
+                "outputs": [],
+                "source": [
+                    "fig, axes = plt.subplots(1, 3, figsize=(16, 5))\n",
+                    "order = ['default_docker', 'static_cap', 'reactive_only', 'full_hecf']\n",
+                    "sns.barplot(data=df, x='mode', y='target_kwh', order=order, ax=axes[0], palette='viridis')\n",
+                    "axes[0].set_title('Container Energy Consumption (kWh - RAPL)')\n",
+                    "axes[0].tick_params(axis='x', rotation=20)\n\n",
+                    "sns.barplot(data=df, x='mode', y='p95_rt_ms', order=order, ax=axes[1], palette='magma')\n",
+                    "axes[1].axhline(500, color='red', linestyle='--', label='SLA 500ms')\n",
+                    "axes[1].set_title('Web Latency P95 (ms)')\n",
+                    "axes[1].tick_params(axis='x', rotation=20)\n",
+                    "axes[1].legend()\n\n",
+                    "sns.barplot(data=df, x='mode', y='elp', order=order, ax=axes[2], palette='crest')\n",
+                    "axes[2].set_title('Energy-Latency Product (ELP = kWh × P95 ms)')\n",
+                    "axes[2].tick_params(axis='x', rotation=20)\n",
+                    "plt.tight_layout()\n",
+                    "plt.show()"
+                ]
+            },
+            {
+                "cell_type": "markdown",
+                "metadata": {},
+                "source": [
+                    "## 3. Time-Series Trajectory per Mode (dari Subfolder `<mode>/json/block_1/rep_1/`)"
+                ]
+            },
+            {
+                "cell_type": "code",
+                "execution_count": None,
+                "metadata": {},
+                "outputs": [],
+                "source": [
+                    "fig, axes = plt.subplots(2, 1, figsize=(13, 8), sharex=False)\n",
+                    "for mode in ['default_docker', 'static_cap', 'reactive_only', 'full_hecf']:\n",
+                    "    files = glob.glob(os.path.join(mode, 'json', 'block_1', 'rep_1', '*_server_metrics.csv'))\n",
+                    "    if files:\n",
+                    "        mdf = pd.read_csv(files[0])\n",
+                    "        mdf['sample_idx'] = range(len(mdf))\n",
+                    "        axes[0].plot(mdf['sample_idx'], mdf['cpu_percent'], label=mode)\n",
+                    "        axes[1].plot(mdf['sample_idx'], mdf['power_watt'], label=mode)\n",
+                    "axes[0].set_title('Container CPU Utilization (%) over 16-Minute Multi-Phase Run (Block 1)')\n",
+                    "axes[0].set_ylabel('CPU %')\n",
+                    "axes[0].legend()\n",
+                    "axes[1].set_title('Container Attributed RAPL Power (Watts) over 16-Minute Run (Block 1)')\n",
+                    "axes[1].set_ylabel('Power (W)')\n",
+                    "axes[1].set_xlabel('Sample Index')\n",
+                    "axes[1].legend()\n",
+                    "plt.tight_layout()\n",
+                    "plt.show()"
+                ]
+            }
+        ],
+        "metadata": {
+            "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
+            "language_info": {"name": "python", "version": "3.10.0"}
+        },
+        "nbformat": 4,
+        "nbformat_minor": 4
+    }
+    nb_path = os.path.join(session_dir, "analysis_summary.ipynb")
+    with open(nb_path, "w", encoding="utf-8") as f:
+        json.dump(nb, f, indent=2)
+    return nb_path
+
+
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python3 scripts/analyze_24runs.py <summary_24runs.csv>")
+        print("Usage: python3 scripts/analyze_24runs.py <summary_all_runs.csv>")
         sys.exit(1)
 
-    csv_path = sys.argv[1]
-    data = defaultdict(lambda: defaultdict(list))
+    csv_path = os.path.abspath(sys.argv[1])
+    session_dir = os.path.dirname(csv_path)
+
+    raw_data = defaultdict(lambda: defaultdict(list))
+    total_gr, total_t1, total_mf, total_fails = 0, 0, 0, 0
+
     with open(csv_path, "r") as f:
         reader = csv.DictReader(f)
         for row in reader:
             b = int(row["block"])
             m = row["mode"]
-            data[m][b].append({
-                "kwh": float(row["rapl_kwh"]),
+            kwh_val = float(row.get("target_kwh") or row.get("rapl_kwh") or 0.0)
+            pkg_kwh_val = float(row.get("rapl_pkg_kwh") or row.get("rapl_kwh") or 0.0)
+            p95_val = float(row["p95_rt_ms"])
+            fails_val = int(row["fail_count"])
+            gr_val = int(row.get("guardrail_triggers", 0))
+            t1_val = int(row.get("tier1_triggers", 0))
+            mf_val = int(row.get("microfreeze_triggers", 0))
+
+            total_gr += gr_val
+            total_t1 += t1_val
+            total_mf += mf_val
+            total_fails += fails_val
+
+            raw_data[m][b].append({
+                "kwh": kwh_val,
+                "pkg_kwh": pkg_kwh_val,
                 "mean_rt": float(row["mean_rt_ms"]),
-                "p95_rt": float(row["p95_rt_ms"]),
-                "fails": int(row["fail_count"]),
+                "p95_rt": p95_val,
+                "elp": kwh_val * p95_val,
+                "fails": fails_val,
                 "oh": float(row["overhead_cpu_pct"]),
+                "freeze_s": float(row.get("freeze_sec", 0.0)),
             })
 
     # Average across replications within each (mode, block) pair
-    agg_data = defaultdict(dict)
-    for m, blocks_dict in data.items():
+    data = defaultdict(dict)
+    for m, blocks_dict in raw_data.items():
         for b, rep_list in blocks_dict.items():
-            agg_data[m][b] = {
+            data[m][b] = {
                 "kwh": mean([r["kwh"] for r in rep_list]),
+                "pkg_kwh": mean([r["pkg_kwh"] for r in rep_list]),
                 "mean_rt": mean([r["mean_rt"] for r in rep_list]),
                 "p95_rt": mean([r["p95_rt"] for r in rep_list]),
+                "elp": mean([r["elp"] for r in rep_list]),
                 "fails": sum(r["fails"] for r in rep_list),
                 "oh": mean([r["oh"] for r in rep_list]),
+                "freeze_s": mean([r["freeze_s"] for r in rep_list]),
             }
-    data = agg_data
 
     modes = ["default_docker", "static_cap", "reactive_only", "full_hecf"]
-    print("\n=== 1. DESCRIPTIVE STATISTICS (MEAN ± SD [95% CI]) ===")
-    print(f"{'Mode':<16} | {'Energy (kWh)':<28} | {'Mean RT (ms)':<18} | {'P95 RT (ms)':<18} | {'Overhead (%)':<14}")
-    print("-" * 104)
+    lines_out = []
+
+    def log(s=""):
+        print(s)
+        lines_out.append(s)
+
+    log("\n=== 1. DESCRIPTIVE STATISTICS (MEAN ± SD [95% CI]) ===")
+    log(f"{'Mode':<16} | {'Energy (kWh)':<28} | {'Mean RT (ms)':<16} | {'P95 RT (ms)':<16} | {'ELP (kWh*ms)':<16} | {'Overhead (%)':<12}")
+    log("-" * 116)
     for m in modes:
         blocks = sorted(data[m].keys())
         if not blocks:
             continue
         kwh_m, kwh_s, kwh_ci = ci95([data[m][b]["kwh"] for b in blocks])
-        rt_m, rt_s, rt_ci = ci95([data[m][b]["mean_rt"] for b in blocks])
-        p95_m, p95_s, p95_ci = ci95([data[m][b]["p95_rt"] for b in blocks])
-        oh_m, oh_s, oh_ci = ci95([data[m][b]["oh"] for b in blocks])
-        print(f"{m:<16} | {kwh_m:.6f} ± {kwh_s:.6f} (±{kwh_ci:.6f}) | {rt_m:6.1f} ± {rt_s:5.1f}   | {p95_m:6.1f} ± {p95_s:5.1f}   | {oh_m:5.2f} ± {oh_s:4.2f}%")
+        rt_m, rt_s, _ = ci95([data[m][b]["mean_rt"] for b in blocks])
+        p95_m, p95_s, _ = ci95([data[m][b]["p95_rt"] for b in blocks])
+        elp_m, elp_s, _ = ci95([data[m][b]["elp"] for b in blocks])
+        oh_m, oh_s, _ = ci95([data[m][b]["oh"] for b in blocks])
+        log(f"{m:<16} | {kwh_m:.6f} ± {kwh_s:.6f} (±{kwh_ci:.6f}) | {rt_m:6.1f} ± {rt_s:5.1f} | {p95_m:6.1f} ± {p95_s:5.1f} | {elp_m:8.5f} ± {elp_s:6.5f} | {oh_m:5.2f} ± {oh_s:4.2f}%")
 
-    # Pairwise comparisons against full_hecf
     baselines = ["default_docker", "static_cap", "reactive_only"]
     common_blocks = sorted(set.intersection(*(set(data[m].keys()) for m in modes))) if all(data[m] for m in modes) else []
 
     if len(common_blocks) >= 2:
-        print("\n=== 2. PAIRED WILCOXON + COHEN'S D + HOLM ADJUSTMENT (Energy kWh) ===")
-        raw_ps = []
-        results = []
+        log("\n=== 2. PAIRED WILCOXON + COHEN'S D + HOLM ADJUSTMENT (Container Energy kWh) ===")
+        raw_ps, results = [], []
         hecf_kwh = [data["full_hecf"][b]["kwh"] for b in common_blocks]
         for base in baselines:
             base_kwh = [data[base][b]["kwh"] for b in common_blocks]
@@ -182,7 +326,31 @@ def main():
 
         adj_ps = holm_adjust(raw_ps)
         for (base, pct_diff, w, p, d), p_holm in zip(results, adj_ps):
-            print(f"full_hecf vs {base:<14}: ΔEnergy={pct_diff:+6.2f}% | W={w:4.1f} | p_raw={p:.4f} | p_Holm={p_holm:.4f} | Cohen's d={d:+.3f}")
+            log(f"full_hecf vs {base:<14}: ΔEnergy={pct_diff:+6.2f}% | W={w:4.1f} | p_raw={p:.4f} | p_Holm={p_holm:.4f} | Cohen's d={d:+.3f}")
+
+        log("\n=== 3. GATE 2 VERIFICATION CHECKLIST (TAHAP B -> TAHAP B+) ===")
+        hecf_oh = mean([data["full_hecf"][b]["oh"] for b in common_blocks])
+        hecf_p95 = mean([data["full_hecf"][b]["p95_rt"] for b in common_blocks])
+        hecf_rt = mean([data["full_hecf"][b]["mean_rt"] for b in common_blocks])
+        reac_rt = mean([data["reactive_only"][b]["mean_rt"] for b in common_blocks])
+        log(f"- Guardrail triggers across session : {total_gr} (Target >= 1)")
+        log(f"- Tier 1 (Aggressive) triggers      : {total_t1} (Target >= 1)")
+        log(f"- Micro-Freeze triggers             : {total_mf} (Target >= 1)")
+        log(f"- HECF Overhead Mean                : {hecf_oh:.2f}% (Target < 5.0%)")
+        log(f"- Total HTTP Failures               : {total_fails} (Target == 0)")
+        log(f"- HECF P95 Latency                  : {hecf_p95:.1f} ms (Target < 500 ms)")
+        log(f"- HECF vs Reactive Mean RT Ratio    : {(hecf_rt / reac_rt if reac_rt > 0 else 1.0):.3f}x (Target <= 1.05x)")
+
+    # Write Markdown Report & Jupyter Notebook in session_dir
+    report_path = os.path.join(session_dir, "statistical_report.md")
+    with open(report_path, "w", encoding="utf-8") as rf:
+        rf.write("# HECF Statistical & Gate Verification Report\n\n```text\n")
+        rf.write("\n".join(lines_out))
+        rf.write("\n```\n")
+
+    nb_path = generate_rcbd_notebook(session_dir)
+    print(f"\n[OK] Laporan Markdown tersimpan di : {report_path}")
+    print(f"[OK] Jupyter Notebook tersimpan di : {nb_path}")
 
 
 if __name__ == "__main__":

@@ -412,10 +412,15 @@ def main():
                     action = "SOFT"
                     quota = CPU_QUOTA_SOFT
 
-            # === Security Layer 4: Micro-Freezing (if enabled) ===
+            # === Security Layer 4: Micro-Freezing (if enabled, ONLY in full_hecf mode) ===
             is_currently_frozen = False
             cumulative_freeze_s = 0.0
-            if "micro_freezer" in security and action not in ("EDOS_FREEZE",):
+            if (
+                "micro_freezer" in security
+                and is_active
+                and MODE == OperationMode.FULL_HECF
+                and action not in ("EDOS_FREEZE", "GUARDRAIL", "AGGRESSIVE")
+            ):
                 mf = security["micro_freezer"]
                 # Record activity for containers that are active
                 if cpu > 1.0:

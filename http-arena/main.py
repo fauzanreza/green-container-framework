@@ -9,8 +9,9 @@ app = FastAPI()
 # 1. JSON Processing Endpoint
 @app.get("/")
 def json_processing():
-    # Simulate some CPU work to process data
-    x = [i**2 for i in range(1000)]
+    # Simulate realistic JSON serialization/CPU work so concurrent load (150-220 users)
+    # drives the 2 uvicorn workers above the 80% CPU Guardrail threshold.
+    x = [i**2 for i in range(15000)]
     return JSONResponse(content={"status": "success", "message": "JSON Data Processed", "data_length": len(x)})
 
 # 2. Async DB Endpoint
