@@ -73,10 +73,13 @@ Runs at cold start to build a complete hardware and environment profile of the h
 - **Hardware Detection:** parses `/proc/cpuinfo` and `/proc/meminfo` to determine
   physical CPU core count and total RAM available on the host.
 - **Hybrid Power Sensor Detection:** at startup, Layer 1 attempts to locate a real
-  hardware power sensor (see §4 — Energy Estimator). It checks for Intel RAPL at
-  `/sys/class/powercap/intel-rapl/` and AMD energy at `/sys/class/hwmon/`. If found,
-  real-time electrical data is used. If blocked (e.g., inside a cloud VPS), the
-  framework logs a notice and falls back to the validated software estimation model.
+  hardware power sensor (see §4 — Energy Estimator). It checks for Intel RAPL across
+  multiple standard kernel powercap paths (`/sys/class/powercap/intel-rapl:0/energy_uj`,
+  `/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj`, and
+  `/sys/devices/virtual/powercap/intel-rapl/intel-rapl:0/energy_uj`) and AMD energy at
+  `/sys/class/hwmon/*/energy1_input`. If found, real-time electrical data is used. If
+  blocked (e.g., inside a cloud VPS), the framework logs a notice and falls back to the
+  validated software estimation model.
 - **Cold-Start Fallback Policy:** for the first `10` samples (revised — at 30s
   polling, 10 samples = 5 min warm-up, fits the 20-min run), the system forces
   **Tier 2 (Balanced)**.
@@ -217,10 +220,14 @@ Extends Layer 4 shaping with a sub-second, zero-CPU idle mechanism:
 - When a `non-priority` container has had no inbound activity for **≥0.8 seconds**,
   Layer 4 writes `1` to `cgroup.freeze`, dropping CPU usage to exactly **0%** while
   keeping the container fully resident in memory (no cold-start penalty).
-- **Event-Driven Idle Detection:** Micro-Freezing idle state is detected via
+- **Event-Driven + CPU-Idle Detection:** Micro-Freezing idle state is detected via
   `cgroup.events` `populated 0` signal (kernel notification when no active processes
-  remain in the cgroup), replacing polling-based `cpu_percent < 1.0` to eliminate false-idle/active during inter-poll gaps.
+  remain in the cgroup) combined with near-zero CPU utilization (`cpu_percent ≤ 1.0%`)
+  over `MICRO_FREEZE_IDLE_TRIGGER_S = 0.8s` — ensuring long-running worker processes
+  (such as `uvicorn` web servers that keep `populated = 1` while idle) can still enter
+  Micro-Freeze safely during silent windows.
 - **Active Memory Reclaim:** Upon freezing, HECF triggers `memory.reclaim` (kernel ≥ 6.1) to proactively free page cache, reducing the frozen container's RAM footprint.
+- **Watchdog Auto-Thaw Integration:** Every freeze operation registers the container with `WatchdogThaw` (`framework/security/watchdog_thaw.py`), which runs on a background daemon thread (0.5s check interval) to guarantee sub-second/bounded thawing if `max_freeze_duration_ms` (1000ms) is reached between main polling cycles.
 - On the next inbound request, `cgroup.freeze = 0` is written, thawing the container
   in **under 1ms**.
 - Hard freeze-duration cap: **1000ms** maximum per cycle (see §5 for why this
@@ -288,9 +295,9 @@ P_idle = cpu_count × 3.75W
 P_max  = cpu_count × 13.5W
 ```
 
-**Frozen Container Power Handling:** When a container is micro-frozen (`is_frozen=True`),
-the estimator returns `p_idle + P_dram(t)` as the container baseline footprint (CPU is idle, but allocated DRAM continues to require active refresh and retention power), avoiding zero-value anomalies
-that can disrupt dataset processing in environments without physical power sensors.
+**Frozen Container Power Handling:**
+- In **Tier A (Hardware-True Mode / RAPL active):** When a container is micro-frozen (`is_frozen=True`), its active CPU fraction is `0.0` (`calculated_cpu = 0.0`), so its attributed power is purely its active DRAM retention footprint (`P_dram(t)`), while the physical reduction in package watts is directly captured by the motherboard RAPL register (`energy_uj`). Even when active `cpu_percent` is low, Tier A strictly uses `hw_power * fraction + P_dram(t)` without overriding back to software `p_idle`.
+- In **Tier B (Software Estimation Fallback):** When a container is micro-frozen (`is_frozen=True`), the estimator returns `p_idle + P_dram(t)` as the container baseline footprint (CPU is idle, but allocated DRAM continues to require active refresh and retention power), avoiding zero-value anomalies that can disrupt dataset processing in environments without physical power sensors.
 
 **Output units:** Joule and kWh only. **No carbon/CO2e conversion of any kind.**
 This was explicitly removed from scope (proposal §1.6).
@@ -298,9 +305,21 @@ This was explicitly removed from scope (proposal §1.6).
 #### Framework Overhead Tracker (`framework/overhead_tracker.py`)
 
 Measures HECF's **own** CPU and RAM consumption (the processes running the
-framework itself), separate from the target containers it monitors. Feeds Metric 5
-("Framework Overhead") — required to validate Hypothesis H2 and answer RQ1.
-Target: **<5%** of total server capacity.
+framework itself) directly from its own cgroup v2 (`cpu.stat` `usage_usec` and
+`memory.current`), separate from the target containers it monitors. CPU overhead is
+normalized by total host logical CPU cores (`cpu_count`):
+`cpu_percent = (Δusage_sec / (Δtime_sec × cpu_count)) × 100%`, representing true
+percentage of total host CPU capacity. Feeds Metric 5 ("Framework Overhead") —
+required to validate Hypothesis H2 and answer RQ1. Target: **<5%** of total server capacity.
+
+#### Telemetry CSV Persistence (`framework/main.py`)
+
+Metrics are appended atomically per polling cycle to `metrics.csv`. To prevent
+`[Errno 16] Device or resource busy` (`EBUSY`) when `metrics.csv` is bind-mounted as a
+single file in Docker and to preserve complete experimental trajectories during
+multi-hour runs, automatic file rotation is disabled by default (`HECF_CSV_ROTATE=false`).
+When rotation is explicitly enabled (`HECF_CSV_ROTATE=true`), truncation is performed via
+in-place stream copy rather than `os.replace()` inode renaming.
 
 #### Mode Selector (`framework/modes.py`)
 
@@ -420,25 +439,38 @@ the codebase.
   | High | 70–85% | High density |
   | Spike | 90–100% burst, then drop to <30% | Sudden traffic storm |
 
-#### 8.2 Experiment Orchestration (`experiments/`)
+#### 8.2 Experiment Orchestration (`experiments/` & `scripts/`)
 
-`run_experiment.py` orchestrates the full design matrix:
-`2 conditions × 3 HttpArena workload types × 4 load levels × 3 replications = 72 executions`.
-Each run: 20 minutes total (5-minute warm-up + 15-minute steady-state evaluation).
+The thesis experimental evaluation is structured into **three distinct stages** (total **49.6 hours** of execution), governed by strict verification gates:
 
+1. **Stage A — Pilot Study (Completed, 72 runs / 24 hours):**
+   `experiments/run_experiment.py` orchestrates the initial exploratory matrix:
+   `2 conditions × 3 HttpArena workload types × 4 load levels × 3 replications = 72 executions`
+   (20 minutes per run: 5-minute warm-up + 15-minute steady-state evaluation).
+   Used to identify initial infrastructure gaps (Open Mode overhead, non-headless load generator, RAPL mount path, and single-file CSV rotation).
+2. **Stage B — Proof-of-Concept / PoC (`scripts/run_experiment_24runs.sh`, 24 runs / 6.4 hours):**
+   Executes a **Randomized Complete Block Design (RCBD)** on `bench-json` (HttpArena JSON workload, `targets.json = ["bench-json"]`):
+   `4 modes (default_docker, static_cap, reactive_only, full_hecf) × 6 randomized blocks = 24 runs`.
+   Each run lasts **16 minutes** across 4 sequential load phases (4m Idle, 4m Steady 25–35%, 4m Microburst 25–72%, 4m Overload 85–95% via headless Locust), preceded by an automated manipulation check.
+   *Statistical justification:* $n = 6$ blocks is the mathematical minimum for a two-sided Paired Wilcoxon Signed-Rank test to achieve $\alpha < 0.05$ ($p_{\min} = 2 / 2^6 = 0.03125$).
+3. **Stage B+ — Main Experiment (`REPLICATIONS=3 ./scripts/run_experiment_24runs.sh`, 72 runs / 19.2 hours):**
+   Executed **only after Stage B passes Gate 2** (verified Guardrail, Tier 1, Micro-Freeze triggers, RAPL delta $\ge 2\text{ W}$, overhead $< 5\%$, zero HTTP failure, and Wilcoxon $p < 0.05$).
+   Expands Stage B with 3 replications (`4 modes × 6 blocks × 3 replications = 72 runs`, 1,152 minutes) to stabilize Cohen's $d$ effect size and 95% confidence intervals for final H1 & H2 thesis claims.
+4. **Stage C — Future Work (~216 runs / ~57 hours, Out of Current Scope):**
+   Full multi-workload generalization across all 3 HttpArena workloads and multi-vCPU scenarios, documented in Bab V as future work.
 
-`baselines/` — configuration presets for the 3 comparison baselines:
+`baselines/` — configuration presets for the 3 internal comparison modes + external literature reference:
 
-1. Default Docker (no dynamic limitation) — absolute baseline
-2. Static Resource Allocation (fixed 80% CPU hard cap)
-3. Reactive Threshold-based System (Guardrail only, no Tier Detection/EMA)
+1. `default_docker` (no dynamic limitation) — absolute baseline
+2. `static_cap` (fixed 80% CPU hard cap)
+3. `reactive_only` (Guardrail only, no Tier Detection/EMA)
+4. External directional baseline: **BrownoutCon** (Klein et al. — Docker Swarm cluster deactivating optional containers; 44% energy savings at the cost of $2.4\times$ mean response time degradation), compared by ratio and direction rather than raw kWh due to testbed differences.
 
-#### 8.3 Analysis Pipeline (`analysis/`)
+#### 8.3 Analysis Pipeline (`analysis/` & `scripts/analyze_24runs.py`)
 
 - `preprocess.py` — IQR-based outlier removal, normalization, descriptive stats
   (mean, median, SD, P95, P50, variance).
-- `stats_tests.py` — Shapiro-Wilk normality test → paired t-test or Wilcoxon
-  signed-rank; Cohen's d effect size; 95% CI for all core metrics.
+- `stats_tests.py` & `scripts/analyze_24runs.py` — exact Paired Wilcoxon signed-rank test, paired Cohen's $d_z$ effect size, 95% CI, and **Holm-Bonferroni** step-down $p$-value adjustment (implemented in 100% Python stdlib / NumPy).
 - `energy_latency_product.py` — `ELP = Energy(kWh) × Latency_p95(ms)` per scenario.
 - `sensitivity.py` — sweeps key parameters at ±20% and outputs heatmap-ready data.
 
@@ -485,12 +517,16 @@ Each run: 20 minutes total (5-minute warm-up + 15-minute steady-state evaluation
 ├── locustfiles/                 # Load Generation Scenarios
 │   └── locustfile.py            # Low / Medium / High / Spike
 │
-├── experiments/                 # Reproduces the 72-run experimental design
+├── experiments/                 # Reproduces the Stage A 72-run pilot experimental design
 │   ├── run_experiment.py
 │   └── baselines/
 │       ├── default_docker.yml
 │       ├── static_cap.yml
 │       └── reactive_only.yml
+│
+├── scripts/                     # Stage B (24-run PoC) & Stage B+ (72-run Main) RCBD harness
+│   ├── run_experiment_24runs.sh # Automated multi-phase headless Locust + RAPL runner
+│   └── analyze_24runs.py        # Pure Python stdlib Wilcoxon, Cohen's d, 95% CI, Holm adjuster
 │
 ├── analysis/                    # Statistical analysis pipeline
 │   ├── preprocess.py

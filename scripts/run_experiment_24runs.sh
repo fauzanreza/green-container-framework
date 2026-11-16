@@ -18,6 +18,13 @@ SUMMARY_CSV="$RESULTS_DIR/summary_24runs.csv"
 
 echo "block,run_idx,mode,rapl_start_uj,rapl_end_uj,rapl_kwh,mean_rt_ms,p95_rt_ms,max_rt_ms,rps,fail_count,overhead_cpu_pct,freeze_sec,nr_throttled_delta" > "$SUMMARY_CSV"
 
+# Parameter Konfigurasi Eksperimen (Bisa dioverride lewat environment variable):
+#   REPLICATIONS : 1 untuk Tahap B (24 run = 6,4 jam), 3 untuk Tahap B+ (72 run = 19,2 jam)
+#   PHASE_DURATION: 4m default (4m x 4 fase = 16 menit/run), atau 15s untuk smoke test
+REPLICATIONS="${REPLICATIONS:-1}"
+PHASE_DUR="${PHASE_DURATION:-4m}"
+TOTAL_RUNS=$((6 * 4 * REPLICATIONS))
+
 MODES=("default_docker" "static_cap" "reactive_only" "full_hecf")
 TARGET="bench-json"
 
@@ -74,18 +81,20 @@ echo '["bench-json"]' > "$GCF_DIR/targets.json"
 docker compose -f "$COMPOSE_FILE" up -d hecf bench-json >/dev/null 2>&1 || true
 
 run_counter=0
+for rep in $(seq 1 "$REPLICATIONS"); do
 for block in $(seq 1 6); do
     # Acak urutan 4 mode dalam blok ini menggunakan python3 stdlib
-    SHUFFLED_MODES=($(python3 -c "import random; m=['default_docker','static_cap','reactive_only','full_hecf']; random.seed($block * 42); random.shuffle(m); print(' '.join(m))"))
+    SEED=$((rep * 100 + block * 42))
+    SHUFFLED_MODES=($(python3 -c "import random; m=['default_docker','static_cap','reactive_only','full_hecf']; random.seed($SEED); random.shuffle(m); print(' '.join(m))"))
     
     echo "============================================================"
-    echo "MEMULAI BLOK $block / 6 — Urutan: ${SHUFFLED_MODES[*]}"
+    echo "REPLIKASI $rep/$REPLICATIONS — BLOK $block/6 — Urutan: ${SHUFFLED_MODES[*]}"
     echo "============================================================"
 
     for mode in "${SHUFFLED_MODES[@]}"; do
         run_counter=$((run_counter + 1))
-        RUN_ID="b${block}_r${run_counter}_${mode}"
-        echo "[$(date +%H:%M:%S)] >>> Run $run_counter/24: Mode=$mode (Blok $block)"
+        RUN_ID="rep${rep}_b${block}_r${run_counter}_${mode}"
+        echo "[$(date +%H:%M:%S)] >>> Run $run_counter/$TOTAL_RUNS: Mode=$mode (Rep $rep, Blok $block)"
 
         # 1. Reset state & Manipulation Check
         reset_target_cgroup
@@ -147,10 +156,9 @@ for block in $(seq 1 6); do
         cp -f metrics.csv "$RESULTS_DIR/metrics_${RUN_ID}.csv" 2>/dev/null || true
         cp -f locustfiles/${RUN_ID}_overload_stats.csv "$RESULTS_DIR/" 2>/dev/null || true
 
-        # 4. Ekstrak ringkasan metrik dengan Python (stdlib + numpy saja)
+        # 4. Ekstrak ringkasan metrik dengan Python 100% stdlib (tanpa dependency eksternal di host)
         ROW=$(python3 - "$block" "$run_counter" "$mode" "$START_UJ" "$END_UJ" "$START_THROTTLE" "$END_THROTTLE" "$RESULTS_DIR/metrics_${RUN_ID}.csv" "locustfiles/${RUN_ID}_overload_stats.csv" << 'PYEOF'
 import sys, csv, os
-import numpy as np
 
 block, run_idx, mode, s_uj, e_uj, s_th, e_th, m_csv, l_csv = sys.argv[1:]
 s_uj, e_uj = int(s_uj), int(e_uj)
@@ -176,7 +184,7 @@ if os.path.exists(m_csv):
 if rapl_kwh <= 0:
     rapl_kwh = kwh_sum
 
-oh_mean = float(np.mean(oh_list)) if oh_list else 0.0
+oh_mean = (sum(oh_list) / len(oh_list)) if oh_list else 0.0
 
 mean_rt, p95_rt, max_rt, rps, fails = 0.0, 0.0, 0.0, 0.0, 0
 if os.path.exists(l_csv):
@@ -198,8 +206,9 @@ PYEOF
         sleep 10
     done
 done
+done
 
 echo "============================================================"
-echo "EKSPERIMEN 24 RUN SELESAI. Menjalankan evaluasi statistik..."
+echo "EKSPERIMEN $TOTAL_RUNS RUN SELESAI. Menjalankan evaluasi statistik..."
 echo "============================================================"
 python3 scripts/analyze_24runs.py "$SUMMARY_CSV"

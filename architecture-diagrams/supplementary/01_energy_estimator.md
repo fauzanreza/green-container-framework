@@ -13,7 +13,9 @@ Model estimasi konsumsi energi hibrida (Joule dan kWh, tanpa konversi emisi karb
 3. **Tier B — Software Estimation Mode (Cloud VPS / Hypervisor):** Menggunakan model linier terkalibrasi dinamis untuk CPU ditambah footprint DRAM:
    $$P_{\text{total}}(t) = \left[ P_{\text{idle}} + (P_{\text{max}} - P_{\text{idle}}) \times U_{\text{CPU}}(t) \right] + P_{\text{dram}}(t)$$
    dengan $P_{\text{idle}} = \text{cores} \times 3.75\text{W}$ dan $P_{\text{max}} = \text{cores} \times 13.5\text{W}$.
-4. **Penanganan Status Micro-Frozen (`is_frozen=True`):** Mengembalikan baseline daya idle host ($P_{\text{idle}}$) ditambah daya retensi DRAM aktif ($P_{\text{dram}}$) sebagai footprint dasar kontainer, menjaga konsistensi dataset telemetri tanpa nilai nol anomali.
+4. **Penanganan Status Micro-Frozen (`is_frozen=True`):**
+   - Pada **Tier A (Hardware-True Mode / RAPL aktif):** Saat kontainer berstatus `is_frozen=True`, fraksi CPU aktifnya adalah `0.0` (`calculated_cpu = 0.0`), sehingga daya kontainer hanya menyisakan retensi DRAM aktif ($P_{\text{dram}}$) sementara penurunan Watt fisik prosesor terekam langsung oleh sensor RAPL (`energy_uj`) tanpa tertimpa konstanta software $P_{\text{idle}}$.
+   - Pada **Tier B (Software Fallback Mode):** Mengembalikan baseline daya idle host ($P_{\text{idle}}$) ditambah daya retensi DRAM aktif ($P_{\text{dram}}$) sebagai footprint dasar kontainer, menjaga konsistensi dataset telemetri di lingkungan virtual tanpa sensor fisik.
 5. **Integrasi Energi (kWh):** Dihitung per interval waktu:
    $$E_{\text{kWh}} = \frac{P_{\text{watt}} \times \Delta t_{\text{seconds}}}{3.600.000}$$
 
@@ -23,19 +25,18 @@ flowchart TD
 
     CALC_DRAM["ram_gb = memory_bytes / (1024³)<br/>p_dram = ram_gb × p_dram_per_gb (0.38 W/GB)"]
 
-    CHECK_FROZEN{"is_frozen == True?<br/>(Kontainer sedang Micro-Frozen)"}
-    SET_IDLE_POWER["power_watt = round(p_idle + p_dram, 3)<br/>(Baseline Footprint Host + Retensi DRAM)"]
+    CHECK_HW{"hw_power != None<br/>DAN hw_power > 0?<br/>(Tier A: Sensor Fisik RAPL/hwmon Aktif)"}
 
-    CHECK_HW{"hw_power != None<br/>DAN hw_power > 0?<br/>(Tier A: Sensor Fisik Aktif)"}
-
-    subgraph HW_MODE["Tier A: Hardware Proportional Apportionment"]
-        CALC_CAPACITY["total_capacity = float(cpu_count × 100.0)"]
+    subgraph HW_MODE["Tier A: Hardware Proportional Apportionment (RAPL)"]
+        CALC_CAPACITY["total_capacity = float(max(1, cpu_count) × 100.0)"]
+        CHECK_HW_FROZEN{"is_frozen == True?"}
+        FRAC_ZERO["fraction = 0.0"]
         CALC_FRACTION["fraction = max(0.0, cpu_percent) / total_capacity"]
-        CALC_HW_WATT["calculated_cpu = hw_power × fraction"]
-        CHECK_HW_ZERO{"calculated_cpu ≤ 0.0?"}
-        HW_FALLBACK_IDLE["power_watt = round(p_idle + p_dram, 3)"]
-        HW_FINAL["power_watt = round(calculated_cpu + p_dram, 3)"]
+        CALC_HW_WATT["calculated_cpu = hw_power × fraction<br/>power_watt = round(calculated_cpu + p_dram, 3)"]
     end
+
+    CHECK_FROZEN{"is_frozen == True?<br/>(Tier B Software Fallback + Micro-Frozen)"}
+    SET_IDLE_POWER["power_watt = round(p_idle + p_dram, 3)<br/>(Baseline Footprint Host + Retensi DRAM)"]
 
     subgraph SW_MODE["Tier B: Software Additive Estimation (Jarus + Kansal)"]
         CALC_UTIL["utilization = max(0.0, min(cpu_percent, 100.0)) / 100.0"]
@@ -50,26 +51,26 @@ flowchart TD
     RETURN(["Return dict(<br/>power_watt, energy_kwh, p_cpu_watt, p_dram_watt)"])
 
     START --> CALC_DRAM
-    CALC_DRAM --> CHECK_FROZEN
-    CHECK_FROZEN -->|Ya| SET_IDLE_POWER
-    CHECK_FROZEN -->|Tidak| CHECK_HW
+    CALC_DRAM --> CHECK_HW
 
     CHECK_HW -->|Ya| CALC_CAPACITY
-    CALC_CAPACITY --> CALC_FRACTION
+    CALC_CAPACITY --> CHECK_HW_FROZEN
+    CHECK_HW_FROZEN -->|Ya| FRAC_ZERO
+    CHECK_HW_FROZEN -->|Tidak| CALC_FRACTION
+    FRAC_ZERO --> CALC_HW_WATT
     CALC_FRACTION --> CALC_HW_WATT
-    CALC_HW_WATT --> CHECK_HW_ZERO
-    CHECK_HW_ZERO -->|Ya| HW_FALLBACK_IDLE
-    CHECK_HW_ZERO -->|Tidak| HW_FINAL
 
-    CHECK_HW -->|Tidak| CALC_UTIL
+    CHECK_HW -->|Tidak| CHECK_FROZEN
+    CHECK_FROZEN -->|Ya| SET_IDLE_POWER
+    CHECK_FROZEN -->|Tidak| CALC_UTIL
+
     CALC_UTIL --> CALC_SW_WATT
     CALC_SW_WATT --> CHECK_SW_ZERO
     CHECK_SW_ZERO -->|Ya| SW_FALLBACK_IDLE
     CHECK_SW_ZERO -->|Tidak| SW_FINAL
 
+    CALC_HW_WATT --> CALC_KWH
     SET_IDLE_POWER --> CALC_KWH
-    HW_FALLBACK_IDLE --> CALC_KWH
-    HW_FINAL --> CALC_KWH
     SW_FALLBACK_IDLE --> CALC_KWH
     SW_FINAL --> CALC_KWH
 

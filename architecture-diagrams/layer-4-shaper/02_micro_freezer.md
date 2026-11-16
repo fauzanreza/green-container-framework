@@ -5,9 +5,9 @@
 > **Kategori:** 🌟 INOVASI ALGORITMA (S2)
 
 Algoritma pembekuan kontainer berbasis kernel Linux cgroups v2 (`cgroup.freeze`). Mengurangi utilisasi CPU kontainer yang menganggur ke **persis 0.0% CPU** tanpa terminasi proses atau degradasi *cold-start delay*.
-- **Pendeteksian Idle Hybrid:** Mengutamakan sinyal event kernel Linux unified hierarchy (`cgroup.events` kolom `populated == 0`) dipadukan dengan jeda tenang minimum `MICRO_FREEZE_IDLE_TRIGGER_S = 0.8s`.
+- **Pendeteksian Idle Hybrid (Event + CPU-Idle):** Menggabungkan sinyal event kernel Linux unified hierarchy (`cgroup.events` kolom `populated == 0`) dengan pemeriksaan `cpu_percent <= 1.0%` setelah jeda tenang minimum `MICRO_FREEZE_IDLE_TRIGGER_S = 0.8s` — sehingga container server jangka panjang (seperti `uvicorn` yang menjaga proses worker tetap hidup / `populated == 1` saat idle) tetap dapat dibekukan saat tidak ada trafik.
 - **Safety Gate (eBPF / Netlink Transaksi):** Memeriksa apakah ada transaksi database atau koneksi aktif yang belum terselesaikan (`ebpf_sensor.has_open_connections()`) sebelum pembekuan dieksekusi.
-- **Batas Siklus Beku Maksimal (Hard Timeout):** Maksimal durasi beku dibatasi `MICRO_FREEZE_MAX_DURATION_MS = 1000ms`. Bila terlewati, mekanisme *Force-Thaw* langsung diaktifkan untuk menjaga SLA jaringan.
+- **Batas Siklus Beku Maksimal (Hard Timeout + WatchdogThaw):** Maksimal durasi beku dibatasi `MICRO_FREEZE_MAX_DURATION_MS = 1000ms` dan didaftarkan ke thread latar belakang `WatchdogThaw` (`track_freeze` / `track_thaw`). Bila terlewati, mekanisme *Force-Thaw* langsung diaktifkan secara asinkron maupun sinkron untuk menjaga SLA jaringan.
 - **Pencairan Sub-Milidetik:** Menulis `cgroup.freeze = 0` mencairkan kontainer dalam waktu <1ms saat request baru tiba (`record_activity`).
 - **Active Memory Reclaim (`memory.reclaim`):** Pada `main.py`, pembekuan kontainer langsung memicu pembersihan cache halaman RAM tak terpakai.
 - **Akumulasi Telemetri:** Durasi beku diakumulasikan (`get_cumulative_freeze_seconds`) dan dicatat ke kolom ke-16 `metrics.csv`.
@@ -34,16 +34,11 @@ flowchart TD
     CALC_IDLE["idle_duration = now - state['last_activity']"]
 
     CHECK_EVENTS["_check_populated(id):<br/>Baca file cgroup.events"]
-    POPULATED_FOUND{"cgroup.events<br/>tersedia?"}
-
-    KERNEL_ACTIVE{"populated == 1?<br/>(Kernel: proses aktif)"}
-    ABORT_POPULATED["Return {action: 'none',<br/>reason: 'populated_active'}"]
-
     KERNEL_IDLE{"idle_duration ≥ 0.8s<br/>(MICRO_FREEZE_IDLE_TRIGGER_S)?"}
-    ABORT_TOO_RECENT_1["Return {action: 'none',<br/>reason: 'depopulated_but_too_recent'}"]
+    ABORT_TOO_RECENT["Return {action: 'none',<br/>reason: 'not_idle_enough'}"]
 
-    FALLBACK_IDLE{"idle_duration ≥ 0.8s<br/>(Fallback Polling)?"}
-    ABORT_TOO_RECENT_2["Return {action: 'none',<br/>reason: 'not_idle_enough'}"]
+    KERNEL_ACTIVE{"populated == True DAN<br/>cpu_percent &gt; 1.0%?<br/>(Proses aktif memproses beban)"}
+    ABORT_POPULATED["Return {action: 'none',<br/>reason: 'populated_active'}"]
 
     CHECK_SAFETY{"ebpf_sensor != None DAN<br/>ebpf_sensor.has_open_connections(id)?"}
     DEFER_FREEZE(["Return {action: 'defer',<br/>reason: 'open_connections'}<br/>Tunda beku agar transaksi DB aman"])
@@ -52,7 +47,7 @@ flowchart TD
     DRY_FREEZE["Log [DRY-RUN] Would FREEZE"]
     REAL_FREEZE["_freeze(name, id):<br/>Tulis '1' ke cgroup.freeze"]
 
-    UPDATE_FROZEN["_state[id]['frozen'] = True<br/>_state[id]['frozen_at'] = now"]
+    UPDATE_FROZEN["_state[id]['frozen'] = True<br/>_state[id]['frozen_at'] = now<br/>watchdog.track_freeze(id)"]
     RETURN_FREEZE(["Return {action: 'freeze',<br/>reason: 'idle:...s'}<br/><i>Di main.py: memicu reclaim_memory()</i>"])
 
     START --> CHECK_PRIO
@@ -71,17 +66,11 @@ flowchart TD
 
     CHECK_CURRENT_FROZEN -->|Tidak| CALC_IDLE
     CALC_IDLE --> CHECK_EVENTS
-    CHECK_EVENTS --> POPULATED_FOUND
-
-    POPULATED_FOUND -->|Ya| KERNEL_ACTIVE
+    CHECK_EVENTS --> KERNEL_IDLE
+    KERNEL_IDLE -->|Tidak| ABORT_TOO_RECENT
+    KERNEL_IDLE -->|Ya| KERNEL_ACTIVE
     KERNEL_ACTIVE -->|Ya| ABORT_POPULATED
-    KERNEL_ACTIVE -->|Tidak| KERNEL_IDLE
-    KERNEL_IDLE -->|Tidak| ABORT_TOO_RECENT_1
-    KERNEL_IDLE -->|Ya| CHECK_SAFETY
-
-    POPULATED_FOUND -->|Tidak| FALLBACK_IDLE
-    FALLBACK_IDLE -->|Tidak| ABORT_TOO_RECENT_2
-    FALLBACK_IDLE -->|Ya| CHECK_SAFETY
+    KERNEL_ACTIVE -->|Tidak (populated==0 atau cpu≤1.0%)| CHECK_SAFETY
 
     CHECK_SAFETY -->|Ya| DEFER_FREEZE
     CHECK_SAFETY -->|Tidak| CHECK_DRY

@@ -240,6 +240,8 @@ flowchart TD
 > 2. Jika ekstensi `edos_guard` memicu aksi `"freeze"`, keputusan mode ditimpa menjadi `EDOS_FREEZE` dan container dibekukan langsung oleh `micro_freezer._freeze()`.
 > 3. Saat dinonaktifkan melalui toggle Dashboard (`framework_status.json` dengan `active = false`), semua target otomatis berada pada aksi `OBSERVE`.
 > 4. Nilai kuota CPU mengacu pada periode `cpu.max` 100.000 µs (`80000` = 0,8 core, `90000` = 0,9 core, `-1` = `"max"` / tanpa batas, dengan batas bawah pengaman 0,2 core di `shaper.py`).
+> 5. Pada `_write_csv_atomic()`, rotasi berkas `metrics.csv` dinonaktifkan secara bawaan (`HECF_CSV_ROTATE=false`) untuk mencegah galat `[Errno 16] Device or resource busy` pada *single-file bind mount* Docker dan menjaga keutuhan data eksperimen multi-jam (jika diaktifkan, rotasi dilakukan secara *in-place copy*).
+> 6. `MicroFreezer` terhubung langsung ke thread latar belakang `WatchdogThaw` sehingga container yang dibekukan (`cgroup.freeze = 1`) dijamin cair kembali secara sub-detik setelah mencapai batas maksimum durasi beku (`1000 ms`), tanpa harus menunggu putaran `time.sleep(current_interval)` berikutnya.
 
 ---
 

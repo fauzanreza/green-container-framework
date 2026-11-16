@@ -112,8 +112,8 @@ flowchart TB
 
     subgraph EXP["Experiment Harness"]
         direction TB
-        RUN["experiments/run_experiment.py"]:::test
-        LOC["Locust (locust-master)<br/>locustfiles/locustfile.py"]:::test
+        RUN["experiments/run_experiment.py &amp;<br/>scripts/run_experiment_24runs.sh"]:::test
+        LOC["Locust (locust-master --headless)<br/>locustfiles/locustfile.py"]:::test
     end
 
     SOCK <-->|docker.from_env| HECF
@@ -144,19 +144,22 @@ flowchart TB
     classDef vol fill:#e9d8fd,stroke:#6b46c1,stroke-width:1.5px,color:#1a202c;
 ```
 
-> **Catatan Deployment:** `experiments/run_experiment.py` menjalankan `docker compose` dari direktori kerja container `locust-master` (`../portfolio-app` pada lingkungan server uji), sedangkan `docker-compose.yml` di repositori ini mendefinisikan tiga service inti: `hecf`, `hecf-dashboard`, dan `bench-json`.
+> **Catatan Deployment & Tahapan Eksperimen (Total 49,6 Jam):**
+> 1. Pada server produksi/uji (`srv-laptop`), seluruh layanan utama (`hecf`, `hecf-dashboard`, `bench-json`, `locust-master`, beserta tunnel Cloudflare) diorkestrasi terpusat melalui `../portfolio-app/docker-compose.yml` di jaringan `portfolio-network`, sedangkan berkas state bersama (`targets.json`, `metrics.csv`, dll.) di-mount dari direktori `green-container-framework`.
+> 2. Eksperimen HECF terdiri dari tiga tahap: **(A) Pilot** 72 run / 24 jam (`experiments/run_experiment.py`, sudah selesai dan mengungkap cacat desain awal), **(B) Proof-of-Concept (PoC)** 24 run / 6,4 jam (`./scripts/run_experiment_24runs.sh`, 6 blok × 4 mode @ 16 menit untuk validasi mekanisme dan statistik minimum Wilcoxon $n=6$), dan **(B+) Main Experiment** 72 run / 19,2 jam (`REPLICATIONS=3 ./scripts/run_experiment_24runs.sh`, untuk klaim utama H1 & H2 setelah Tahap B lulus Gate 2).
 
 ### Pemetaan File ke Infrastruktur
 
 | File / Path | Peran Teknis | Kategori |
 | --- | --- | --- |
-| `docker-compose.yml` | Orkestrasi tiga service (`hecf` batas memori 128M, `hecf-dashboard` batas 256M pada port 8092, dan `bench-json` pada port 8000) beserta volume mount host. | Infrastruktur |
+| `docker-compose.yml` | Orkestrasi service (`hecf` batas memori 128M dengan mount `/sys/class/powercap:ro`, `hecf-dashboard` batas 256M pada port 8092, `bench-json` pada port 8000, dan `locust-master` headless) beserta volume mount host. | Infrastruktur |
 | `Dockerfile` | Image berbasis Python 3.10-slim beserta dependensi sistem dan perintah eksekusi utama `python -m framework.main`. | Infrastruktur |
 | `requirements.txt` | Daftar pustaka Python (`docker`, `numpy`, `requests`, `pytest`, `locust`, `Flask`, `gunicorn`). | Infrastruktur |
 | `dashboard.py` | Aplikasi web Flask (dijalankan dengan Gunicorn 1 worker × 2 threads) untuk visualisasi metrik, panel *Managed Containers*, dan pemantau host. | Tools (S1) |
-| `http-arena/main.py` | Layanan web uji berbasis FastAPI + Uvicorn yang menyediakan endpoint JSON (`/`), berkas statis (`/static/dummy.txt`), dan endpoint basis data (`/db`). | Tools (S1) |
+| `http-arena/main.py` & `http-arena/Dockerfile` | Layanan web uji berbasis FastAPI + Uvicorn (dilengkapi `stress-ng` untuk verifikasi cgroups v2 manual) yang menyediakan endpoint JSON (`/`), berkas statis (`/static/dummy.txt`), dan endpoint basis data (`/db`). | Tools (S1) |
 | `locustfiles/locustfile.py` | Skrip simulator beban lalu lintas HTTP dengan dukungan variasi profil beban dan jenis workload (`json`, `static`, `db`, `all`). | Tools (S1) |
-| `experiments/run_experiment.py` | Pengendali skenario eksperimen yang memicu pengujian lintas mode, workload, intensitas, dan replikasi, lalu mengarsipkan hasilnya. | Metodologi |
+| `experiments/run_experiment.py` | Pengendali skenario eksperimen Tahap A (Pilot 72 run / 24 jam) lintas mode, workload, intensitas, dan replikasi. | Metodologi |
+| `scripts/run_experiment_24runs.sh` & `scripts/analyze_24runs.py` | Orkestrator otomatis RCBD Tahap B (24 run / 6,4 jam) & Tahap B+ (72 run / 19,2 jam) dengan 4 fase beban Locust headless, pembacaan RAPL langsung, manipulation check, serta uji statistik Paired Wilcoxon, Cohen's $d$, 95% CI, dan koreksi Holm-Bonferroni (100% Python stdlib). | Metodologi |
 | `targets.json`, `priority_map.json`, `framework_status.json` | Berkas konfigurasi bersama yang ditulis oleh Dashboard UI dan dibaca secara berkala oleh HECF Engine. | Infrastruktur (IPC) |
 | `discovered_containers.json` | Snapshot daftar container non-excluded yang ditulis oleh Engine dan dibaca Dashboard dalam mode *read-only*. | Infrastruktur (IPC) |
 | `metrics.csv` | Jembatan data telemetri 16 kolom yang ditulis atomik oleh Engine untuk dibaca Dashboard maupun analisis pasca-eksperimen. | Infrastruktur (IPC) |

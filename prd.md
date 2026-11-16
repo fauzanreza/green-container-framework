@@ -152,9 +152,9 @@ Full technical spec: `architecture.md` §3.
   - **Micro-Freezing:** when a non-priority container is idle (no inbound requests)
     for ≥0.8 seconds, Layer 4 writes `cgroup.freeze = 1` to drop CPU usage to exactly
     **0%** while keeping the container resident in RAM, and triggers `memory.reclaim` (kernel ≥ 6.1) to free page cache. On the next request, the
-    container thaws in **<1ms**. Hard cap: 1000ms per freeze cycle.
-    Uses **Event-Driven Idle Detection** (`cgroup.events populated 0`) instead of polling-based CPU thresholds,
-    eliminating false-idle/false-active during inter-poll gaps.
+    container thaws in **<1ms**. Hard cap: 1000ms per freeze cycle (enforced both during polling and asynchronously via the `WatchdogThaw` background thread).
+    Uses **Hybrid Event-Driven + CPU-Idle Detection** (`cgroup.events populated 0` or `cpu_percent ≤ 1.0%` after `idle_trigger_seconds`),
+    ensuring persistent web worker processes (`uvicorn`) can still be micro-frozen during silent windows while eliminating false-idle triggers.
   - **zram-as-swap + `memory.swap.max`:** verifies zram-backed swap at cold start;
     sets `memory.swap.max` to allow compressed swap (or 0 if no zram) to prevent
     uncontrolled disk thrashing.
@@ -171,10 +171,10 @@ Full technical spec: `architecture.md` §3.
 HECF uses a tiered approach to produce the most accurate energy data possible for
 the deployment environment:
 
-- **Hardware-True Mode (bare-metal):** if Layer 1 detects Intel RAPL or AMD energy
+- **Hardware-True Mode (bare-metal):** if Layer 1 detects Intel RAPL (`/sys/class/powercap/intel-rapl:0/energy_uj` or `/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj`) or AMD energy
   counters, the estimator reads real Joules from the motherboard and uses
   **Proportional Power Apportionment** to attribute power per container based on
-  CPU usage share, plus active container memory footprint ($P_{\text{dram}}$).
+  CPU usage share (`Total_HW_Watts × (Container_CPU% / Total_CPU_Capacity)`), plus active container memory footprint ($P_{\text{dram}}$), without overriding low/idle readings back to software `p_idle`.
 
 - **Software Estimation Mode (cloud VPS / virtualized):** if hardware sensors are
   blocked, uses an **Additive Multi-Component Model** accounting for both CPU compute
@@ -192,7 +192,7 @@ the deployment environment:
   model self-calibrating for the actual hardware environment.
 
 - **Micro-Frozen Container Power:** When a container is micro-frozen (`is_frozen=True`),
-  the estimator returns `p_idle + P_dram(t)` as the container baseline footprint (CPU is idle, but allocated DRAM continues to require active refresh and retention power), avoiding zero-value anomalies
+  in Hardware-True Mode its CPU share drops to `0.0` (leaving only $P_{\text{dram}}(t)$ while physical package watt savings are captured by RAPL); in Software Fallback Mode, the estimator returns `p_idle + P_dram(t)` as the container baseline footprint (CPU is idle, but allocated DRAM continues to require active refresh and retention power), avoiding zero-value anomalies
   that can disrupt dataset processing in environments without physical power sensors.
 
 - **Output:** Joule and kWh only. **No carbon/CO2e conversion of any kind** —
@@ -200,7 +200,7 @@ the deployment environment:
 
 #### 4.3 Framework Overhead Tracking
 
-HECF measures and reports its **own** CPU/RAM consumption as a first-class metric
+HECF measures and reports its **own** CPU/RAM consumption directly from its own cgroup v2 (`cpu.stat` `usage_usec` normalized across total host logical cores `cpu_count`, and `memory.current`) as a first-class metric
 ("Framework Overhead"), separate from the containers it manages. Target: **<5%** of
 total server capacity. Required to validate Hypothesis H2 and answer RQ1.
 
@@ -289,11 +289,12 @@ Runtime-selectable mode via environment variable:
   Energy Consumption, Web Latency (SLA), Framework Overhead.
 - **Controlled variables:** identical hardware, OS, Docker Engine version, workload
   type/volume, and experiment duration across all runs.
-- **Duration/replication:** 20 minutes per run (5-minute warm-up excluded, 15-minute steady-state evaluation),
-  replicated 3×.
-- **Total executions:** `2 conditions × 3 HttpArena workload types × 4 load levels
-  × 3 replications = 72 individual executions`, reproducible via
-  `experiments/run_experiment.py`.
+- **Duration/replication & Three-Stage Experimental Roadmap (Total 49.6 Hours):**
+  1. **Stage A — Pilot Study (Completed, 72 runs / 24 hours):** 20 minutes per run (5-minute warm-up excluded, 15-minute steady-state evaluation), replicated 3× across `2 conditions × 3 HttpArena workload types × 4 load levels = 72 executions` (`experiments/run_experiment.py`). Served to diagnose initial open-mode and load-generation bottlenecks.
+  2. **Stage B — Proof-of-Concept / PoC (24 runs / 6.4 hours):** Randomized Complete Block Design (RCBD) of `4 modes (default_docker, static_cap, reactive_only, full_hecf) × 6 blocks = 24 runs` on `bench-json` (`targets.json = ["bench-json"]`), 16 minutes per run (4m Idle, 4m Steady, 4m Microburst, 4m Overload via headless Locust) with pre-run manipulation checks (`scripts/run_experiment_24runs.sh`). $n = 6$ blocks provides the minimum statistical power for a two-sided Paired Wilcoxon test to reach $p = 0.03125 < 0.05$.
+  3. **Stage B+ — Main Experiment (72 runs / 19.2 hours):** Executed only after Stage B passes Gate 2 verification (Guardrail, Tier 1, Micro-Freeze triggers, RAPL delta $\ge 2\text{ W}$, overhead $< 5\%$, zero failure, Wilcoxon $p < 0.05$). Runs `4 modes × 6 blocks × 3 replications = 72 runs` (`REPLICATIONS=3 ./scripts/run_experiment_24runs.sh`) to establish stable Cohen's $d$ and 95% CI for primary H1 & H2 claims.
+  4. **Stage C — Future Work (~216 runs / ~57 hours):** Full multi-workload and multi-profile expansion documented in Bab V.
+- **External Literature Comparator:** **BrownoutCon** (Klein et al.) — used as a directional/ratio comparator (saved 44% energy by deactivating optional containers in a Docker Swarm cluster, but degraded mean response time by $2.4\times$).
 
 ---
 

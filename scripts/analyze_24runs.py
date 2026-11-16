@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
 scripts/analyze_24runs.py
-Evaluasi Statistik Eksperimen 24 Run (6 Blok x 4 Mode) — Stdlib + NumPy ONLY!
+Evaluasi Statistik Eksperimen 24 Run (6 Blok x 4 Mode) — 100% Python Standard Library!
+Tidak membutuhkan numpy/scipy/pandas di host OS sehingga dijamin berjalan di server mana pun.
 Menghitung:
 - Mean, SD, 95% Confidence Interval per mode
 - Paired Wilcoxon Signed-Rank Test (exact distribution untuk N=6 pasang blok)
-- Cohen's d effect size
+- Cohen's d effect size (paired d_z)
 - Holm-Bonferroni p-value adjustment untuk multiple comparisons
 - Evaluasi klaim H1 & H2
 """
@@ -14,24 +15,34 @@ import sys
 import csv
 import math
 from collections import defaultdict
-import numpy as np
 
 
-def wilcoxon_signed_rank_exact(x: np.ndarray, y: np.ndarray) -> tuple[float, float]:
+def mean(arr: list[float]) -> float:
+    return sum(arr) / len(arr) if arr else 0.0
+
+
+def std_sample(arr: list[float]) -> float:
+    n = len(arr)
+    if n < 2:
+        return 0.0
+    m = mean(arr)
+    var = sum((x - m) ** 2 for x in arr) / (n - 1)
+    return math.sqrt(var)
+
+
+def wilcoxon_signed_rank_exact(x: list[float], y: list[float]) -> tuple[float, float]:
     """
-    Exact two-sided Paired Wilcoxon Signed-Rank Test using stdlib + NumPy only.
+    Exact two-sided Paired Wilcoxon Signed-Rank Test using 100% Python stdlib.
     Ideal for small paired block designs (e.g. N=6 blocks).
     """
-    d = np.asarray(x, dtype=float) - np.asarray(y, dtype=float)
-    d = d[d != 0.0]
+    d = [ float(xi) - float(yi) for xi, yi in zip(x, y) if (float(xi) - float(yi)) != 0.0 ]
     n = len(d)
     if n == 0:
         return 0.0, 1.0
 
-    abs_d = np.abs(d)
-    # Compute ranks with average tie-breaking
-    order = np.argsort(abs_d)
-    ranks = np.empty(n, dtype=float)
+    abs_d = [abs(val) for val in d]
+    order = sorted(range(n), key=lambda idx: abs_d[idx])
+    ranks = [0.0] * n
     i = 0
     while i < n:
         j = i
@@ -42,9 +53,10 @@ def wilcoxon_signed_rank_exact(x: np.ndarray, y: np.ndarray) -> tuple[float, flo
             ranks[order[k]] = avg_rank
         i = j + 1
 
-    w_pos = float(np.sum(ranks[d > 0]))
-    w_neg = float(np.sum(ranks[d < 0]))
+    w_pos = sum(ranks[idx] for idx in range(n) if d[idx] > 0)
+    w_neg = sum(ranks[idx] for idx in range(n) if d[idx] < 0)
     w_stat = min(w_pos, w_neg)
+    total_rank_sum = sum(ranks)
 
     # Exact enumeration over 2^n sign assignments
     total_configs = 1 << n
@@ -54,7 +66,7 @@ def wilcoxon_signed_rank_exact(x: np.ndarray, y: np.ndarray) -> tuple[float, flo
         for bit in range(n):
             if (mask >> bit) & 1:
                 s += ranks[bit]
-        s_min = min(s, float(np.sum(ranks)) - s)
+        s_min = min(s, total_rank_sum - s)
         if s_min <= w_stat + 1e-9:
             extreme_count += 1
 
@@ -62,33 +74,32 @@ def wilcoxon_signed_rank_exact(x: np.ndarray, y: np.ndarray) -> tuple[float, flo
     return w_stat, p_val
 
 
-def cohens_d_paired(x: np.ndarray, y: np.ndarray) -> float:
+def cohens_d_paired(x: list[float], y: list[float]) -> float:
     """Paired Cohen's d_z = mean(diff) / sd(diff)."""
-    diff = np.asarray(x, dtype=float) - np.asarray(y, dtype=float)
+    diff = [float(xi) - float(yi) for xi, yi in zip(x, y)]
     if len(diff) < 2:
         return 0.0
-    sd = float(np.std(diff, ddof=1))
+    sd = std_sample(diff)
     if sd <= 1e-12:
         return 0.0
-    return float(np.mean(diff)) / sd
+    return mean(diff) / sd
 
 
-def ci95(arr: np.ndarray) -> tuple[float, float, float]:
+def ci95(arr: list[float]) -> tuple[float, float, float]:
     """Return (mean, sd, half_width_95ci) using t-critical for df=len-1."""
-    a = np.asarray(arr, dtype=float)
+    a = [float(v) for v in arr]
     n = len(a)
     if n == 0:
         return 0.0, 0.0, 0.0
-    mean = float(np.mean(a))
+    m = mean(a)
     if n < 2:
-        return mean, 0.0, 0.0
-    sd = float(np.std(a, ddof=1))
-    # t_0.975 lookup table for small N (df = 1..10), fallback 1.96
+        return m, 0.0, 0.0
+    sd = std_sample(a)
     t_table = {1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571,
                6: 2.447, 7: 2.365, 8: 2.306, 9: 2.262, 10: 2.228}
     t_crit = t_table.get(n - 1, 1.96)
     hw = t_crit * (sd / math.sqrt(n))
-    return mean, sd, hw
+    return m, sd, hw
 
 
 def holm_adjust(p_values: list[float]) -> list[float]:
@@ -110,24 +121,37 @@ def main():
         sys.exit(1)
 
     csv_path = sys.argv[1]
-    data = defaultdict(lambda: defaultdict(dict))
+    data = defaultdict(lambda: defaultdict(list))
     with open(csv_path, "r") as f:
         reader = csv.DictReader(f)
         for row in reader:
             b = int(row["block"])
             m = row["mode"]
-            data[m][b] = {
+            data[m][b].append({
                 "kwh": float(row["rapl_kwh"]),
                 "mean_rt": float(row["mean_rt_ms"]),
                 "p95_rt": float(row["p95_rt_ms"]),
                 "fails": int(row["fail_count"]),
                 "oh": float(row["overhead_cpu_pct"]),
+            })
+
+    # Average across replications within each (mode, block) pair
+    agg_data = defaultdict(dict)
+    for m, blocks_dict in data.items():
+        for b, rep_list in blocks_dict.items():
+            agg_data[m][b] = {
+                "kwh": mean([r["kwh"] for r in rep_list]),
+                "mean_rt": mean([r["mean_rt"] for r in rep_list]),
+                "p95_rt": mean([r["p95_rt"] for r in rep_list]),
+                "fails": sum(r["fails"] for r in rep_list),
+                "oh": mean([r["oh"] for r in rep_list]),
             }
+    data = agg_data
 
     modes = ["default_docker", "static_cap", "reactive_only", "full_hecf"]
     print("\n=== 1. DESCRIPTIVE STATISTICS (MEAN ± SD [95% CI]) ===")
-    print(f"{'Mode':<16} | {'Energy (kWh)':<24} | {'Mean RT (ms)':<18} | {'P95 RT (ms)':<18} | {'Overhead (%)':<14}")
-    print("-" * 100)
+    print(f"{'Mode':<16} | {'Energy (kWh)':<28} | {'Mean RT (ms)':<18} | {'P95 RT (ms)':<18} | {'Overhead (%)':<14}")
+    print("-" * 104)
     for m in modes:
         blocks = sorted(data[m].keys())
         if not blocks:
@@ -146,12 +170,13 @@ def main():
         print("\n=== 2. PAIRED WILCOXON + COHEN'S D + HOLM ADJUSTMENT (Energy kWh) ===")
         raw_ps = []
         results = []
-        hecf_kwh = np.array([data["full_hecf"][b]["kwh"] for b in common_blocks])
+        hecf_kwh = [data["full_hecf"][b]["kwh"] for b in common_blocks]
         for base in baselines:
-            base_kwh = np.array([data[base][b]["kwh"] for b in common_blocks])
+            base_kwh = [data[base][b]["kwh"] for b in common_blocks]
             w, p = wilcoxon_signed_rank_exact(hecf_kwh, base_kwh)
             d = cohens_d_paired(hecf_kwh, base_kwh)
-            pct_diff = ((np.mean(hecf_kwh) - np.mean(base_kwh)) / np.mean(base_kwh) * 100.0) if np.mean(base_kwh) > 0 else 0.0
+            mean_base = mean(base_kwh)
+            pct_diff = ((mean(hecf_kwh) - mean_base) / mean_base * 100.0) if mean_base > 0 else 0.0
             raw_ps.append(p)
             results.append((base, pct_diff, w, p, d))
 

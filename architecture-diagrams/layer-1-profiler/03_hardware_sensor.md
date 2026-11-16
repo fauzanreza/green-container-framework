@@ -1,10 +1,10 @@
 # Flowchart — hardware_sensor.PowerSensor (Layer 1)
 
-> **Kode Sumber:** `framework/hardware_sensor.py` → class `PowerSensor`, fungsi `_detect_sensor()`, `_read_joules()`, dan `get_power_watts()` (baris 12–97)
+> **Kode Sumber:** `framework/hardware_sensor.py` → class `PowerSensor`, fungsi `_detect_sensor()`, `_read_joules()`, dan `get_power_watts()` (baris 12–101)
 > **Posisi di Diagram:** Layer 1 — Environment Profiler → Hardware Power Sensor Detection & Acquisition
 > **Kategori:** 🛠️ TOOLS & INFRASTRUKTUR (S1)
 
-Modul pembaca sensor daya fisik tingkat motherboard/silikon. Mendeteksi register energi Intel RAPL (`/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj`) atau AMD Energy (`/sys/class/hwmon/*/energy1_input`). Dilengkapi perlindungan pembacaan baseline pertama dan unwrap register counter saat overflow (`max_energy_range_uj`). Jika tidak tersedia (misal di cloud VPS tanpa virtual RAPL), modul fallback dengan aman dan mengembalikan `None`.
+Modul pembaca sensor daya fisik tingkat motherboard/silikon. Mendeteksi register energi Intel RAPL pada berbagai layout kernel Linux (`/sys/class/powercap/intel-rapl:0/energy_uj`, `/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj`, dan `/sys/devices/virtual/powercap/intel-rapl/intel-rapl:0/energy_uj`) atau AMD Energy (`/sys/class/hwmon/*/energy1_input`). Dilengkapi perlindungan pembacaan baseline pertama dan unwrap register counter saat overflow (`max_energy_range_uj`). Jika tidak tersedia (misal di cloud VPS tanpa virtual RAPL), modul fallback dengan aman dan mengembalikan `None`.
 
 ```mermaid
 flowchart TD
@@ -12,7 +12,7 @@ flowchart TD
 
     DETECT["_detect_sensor():<br/>Cari path register daya"]
 
-    CHECK_RAPL["1. Cek Intel RAPL:<br/>/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj<br/>(exists & os.access R_OK)"]
+    CHECK_RAPL["1. Cek Kandidat Intel RAPL:<br/>• /sys/class/powercap/intel-rapl:0/energy_uj<br/>• /sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj<br/>• /sys/devices/virtual/powercap/.../energy_uj<br/>(exists & os.access R_OK)"]
     RAPL_FOUND{"RAPL ada &<br/>bisa dibaca?"}
     SET_RAPL["sensor_path = rapl_path"]
 
