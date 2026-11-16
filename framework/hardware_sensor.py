@@ -25,10 +25,15 @@ class PowerSensor:
 
     def _detect_sensor(self) -> str:
         """Detects if a hardware power sensor is readable."""
-        # 1. Intel RAPL
-        rapl_path = "/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj"
-        if os.path.exists(rapl_path) and os.access(rapl_path, os.R_OK):
-            return rapl_path
+        # 1. Intel RAPL (check both standard powercap layout and subfolder layout)
+        rapl_candidates = [
+            "/sys/class/powercap/intel-rapl:0/energy_uj",
+            "/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj",
+            "/sys/devices/virtual/powercap/intel-rapl/intel-rapl:0/energy_uj",
+        ]
+        for rapl_path in rapl_candidates:
+            if os.path.exists(rapl_path) and os.access(rapl_path, os.R_OK):
+                return rapl_path
         
         # 2. AMD Energy (often in hwmon)
         # Search for energy1_input in hwmon directories

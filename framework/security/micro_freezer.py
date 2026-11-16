@@ -48,6 +48,7 @@ class MicroFreezer:
         self._max_freeze_ms = max_freeze_duration_ms
         self._ebpf_sensor = ebpf_sensor
         self._dry_run = dry_run
+        self._watchdog = None
 
         # container_id -> {"frozen": bool, "frozen_at": float, "last_activity": float}
         self._state = {}
@@ -59,6 +60,10 @@ class MicroFreezer:
             "dry_run=%s, idle_mode=event+fallback)",
             idle_trigger_seconds, max_freeze_duration_ms, dry_run
         )
+
+    def set_watchdog(self, watchdog):
+        """Attach WatchdogThaw instance for automatic background thawing after max_freeze_ms."""
+        self._watchdog = watchdog
 
     def record_activity(self, container_id: str):
         """Record that a container had activity (request, I/O, etc.)."""
@@ -115,22 +120,17 @@ class MicroFreezer:
         # Check idle duration
         idle_duration = now - state["last_activity"]
 
-        # === Event-Driven Idle Detection (Gap #2) ===
-        # Primary: check cgroup.events 'populated' field
-        # populated=0 means kernel confirms no active processes in cgroup
+        # === Event-Driven + CPU-Idle Detection (Gap #2) ===
+        # Primary: check cgroup.events 'populated' field OR near-zero CPU (< 1.0%)
+        # Note: Long-running servers (e.g. uvicorn) always keep populated=1 because
+        # worker processes stay alive in the cgroup even when 100% idle.
+        # Therefore, a container is idle-eligible if idle_duration >= _idle_trigger
+        # AND (populated == False OR cpu_percent <= 1.0).
         populated = self._check_populated(container_id)
-        if populated is not None:
-            # Event-driven mode available
-            if populated:
-                # Kernel says processes are active — not idle
-                return {"action": "none", "reason": "populated_active"}
-            # populated=0 AND idle duration met — safe to freeze
-            if idle_duration < self._idle_trigger:
-                return {"action": "none", "reason": f"depopulated_but_too_recent:{idle_duration:.1f}s"}
-        else:
-            # Fallback: polling-based idle check (cgroup.events unavailable)
-            if idle_duration < self._idle_trigger:
-                return {"action": "none", "reason": f"not_idle_enough:{idle_duration:.1f}s"}
+        if idle_duration < self._idle_trigger:
+            return {"action": "none", "reason": f"not_idle_enough:{idle_duration:.1f}s"}
+        if populated is True and cpu_percent > 1.0:
+            return {"action": "none", "reason": "populated_active"}
 
         # Container is idle long enough → check safety before freezing
         # SAFETY CHECK: no uncommitted database transaction in flight
@@ -165,6 +165,8 @@ class MicroFreezer:
 
         self._state[container_id]["frozen"] = True
         self._state[container_id]["frozen_at"] = time.time()
+        if self._watchdog:
+            self._watchdog.track_freeze(container_id)
 
     def _thaw(self, container_id: str, reason: str = ""):
         """Write 0 to cgroup.freeze to resume container (sub-1ms)."""
@@ -179,6 +181,8 @@ class MicroFreezer:
         # (e.g. dry_run mode, dev machine, or container already removed)
         self._state[container_id]["frozen"] = False
         self._state[container_id]["frozen_at"] = 0.0
+        if self._watchdog:
+            self._watchdog.track_thaw(container_id)
 
         freeze_path = self._get_freeze_path(container_id)
         if not freeze_path:

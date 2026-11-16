@@ -167,6 +167,8 @@ def _init_security(host_profile: dict):
         )
         if MICRO_FREEZE_ENABLED:
             watchdog.start()
+            if "micro_freezer" in components:
+                components["micro_freezer"].set_watchdog(watchdog)
         components["watchdog_thaw"] = watchdog
 
         # #7: Duty-Cycle Freezer
@@ -222,7 +224,7 @@ def main():
     guardrail = Guardrail()
     tier_detector = TierDetector()
     predictor = EMAPredictor()
-    overhead_tracker = OverheadTracker()
+    overhead_tracker = OverheadTracker(cpu_count=cpu_count)
 
     current_interval = SAMPLING_INTERVAL_LOW
     logger.info("Framework started. Waiting %d seconds for first sample...", current_interval)
@@ -572,7 +574,9 @@ MAX_CSV_LINES = 10000  # Hard cap — rotates when exceeded
 def _write_csv_atomic(csv_path: str, rows: list):
     """
     Append CSV rows directly — O(1) memory, no full-file read.
-    Periodically rotates the file to prevent unbounded disk growth.
+    Rotation is disabled by default (set HECF_CSV_ROTATE=true to enable) to avoid
+    [Errno 16] Device or resource busy when metrics.csv is bind-mounted as a file,
+    and to preserve complete thesis experiment data.
     """
     try:
         with open(csv_path, "a", newline="") as f:
@@ -582,21 +586,20 @@ def _write_csv_atomic(csv_path: str, rows: list):
     except Exception as e:
         logger.error("Failed writing to CSV: %s", e)
 
-    # Rotate if file exceeds MAX_CSV_LINES (checked infrequently)
-    try:
-        _maybe_rotate_csv(csv_path)
-    except Exception as e:
-        logger.debug("CSV rotation check skipped: %s", e)
+    if os.getenv("HECF_CSV_ROTATE", "false").lower() == "true":
+        try:
+            _maybe_rotate_csv(csv_path)
+        except Exception as e:
+            logger.debug("CSV rotation check skipped: %s", e)
 
 
 def _maybe_rotate_csv(csv_path: str):
     """
     If the CSV exceeds MAX_CSV_LINES, keep only the last half.
-    Uses a streaming approach to avoid loading the entire file.
+    Uses in-place copy instead of os.replace() to support Docker single-file bind mounts.
     """
     try:
         with open(csv_path, "r") as f:
-            # Count lines cheaply
             line_count = sum(1 for _ in f)
     except Exception:
         return
@@ -610,14 +613,17 @@ def _maybe_rotate_csv(csv_path: str):
         with open(csv_path, "r", newline="") as src, \
              open(tmp_path, "w", newline="") as dst:
             for i, line in enumerate(src):
-                # Always keep the header (line 0)
                 if i == 0 or i >= keep_from:
                     dst.write(line)
-        os.replace(tmp_path, csv_path)
-        logger.info("CSV rotated: %d → %d lines", line_count, MAX_CSV_LINES // 2)
+        # Write back in-place instead of os.replace() so single-file bind mounts don't fail with EBUSY
+        with open(tmp_path, "r", newline="") as src, \
+             open(csv_path, "w", newline="") as dst:
+            for line in src:
+                dst.write(line)
+        os.remove(tmp_path)
+        logger.info("CSV rotated in-place: %d → %d lines", line_count, MAX_CSV_LINES // 2)
     except Exception as e:
         logger.error("CSV rotation failed: %s", e)
-        # Clean up temp file on failure
         if os.path.exists(tmp_path):
             try:
                 os.remove(tmp_path)

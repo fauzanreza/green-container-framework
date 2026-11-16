@@ -10,10 +10,11 @@ import logging
 logger = logging.getLogger("hecf.overhead")
 
 class OverheadTracker:
-    def __init__(self):
+    def __init__(self, cpu_count: int = None):
         self._prev_time = None
         self._prev_usage = 0
         self._cgroup_path = None
+        self._cpu_count = max(1, cpu_count or os.cpu_count() or 1)
         self._init_path()
         
     def _init_path(self):
@@ -62,7 +63,8 @@ class OverheadTracker:
             dt = now - self._prev_time
             du = (usage_usec - self._prev_usage) / 1_000_000.0
             if dt > 0:
-                cpu_percent = (du / dt) * 100.0
+                # Normalize by host CPU count so overhead reflects % of total host CPU
+                cpu_percent = (du / (dt * self._cpu_count)) * 100.0
                 
         self._prev_time = now
         self._prev_usage = usage_usec

@@ -37,22 +37,22 @@ def estimate_power(cpu_percent: float, p_idle: float, p_max: float,
     ram_gb = max(0.0, float(memory_bytes)) / (1024.0 ** 3)
     p_dram = ram_gb * p_dram_per_gb
 
-    # Micro-Frozen container = 0% CPU. Instead of returning 0.0W (which breaks
-    # datasets that lack physical sensors), we fall back to the host's idle power
-    # as the baseline CPU footprint, plus DRAM retention power.
-    if is_frozen:
-        return round(p_idle + p_dram, 3)
-
     if hw_power is not None and hw_power > 0:
-        # Hardware-True: Proportional Power Apportionment
-        # Container CPU Power = Total HW Power * (Container CPU / Total CPU Capacity)
-        total_capacity = float(cpu_count * 100.0)
-        fraction = max(0.0, cpu_percent) / total_capacity
+        # Hardware-True: Proportional Power Apportionment (RAPL)
+        # Container_Power = Total_HW_Watts * (Container_CPU% / Total_CPU_Capacity) + P_dram(t)
+        total_capacity = float(max(1, cpu_count) * 100.0)
+        if is_frozen:
+            fraction = 0.0
+        else:
+            fraction = max(0.0, cpu_percent) / total_capacity
         
         calculated_cpu = hw_power * fraction
-        if calculated_cpu <= 0.0:
-            calculated_cpu = p_idle
         return round(calculated_cpu + p_dram, 3)
+
+    # Micro-Frozen container = 0% CPU. In software fallback (lacking physical sensors),
+    # fall back to the host's idle power as the baseline CPU footprint + DRAM retention power.
+    if is_frozen:
+        return round(p_idle + p_dram, 3)
     else:
         # Software Fallback: Additive Linear Model (Jarus et al. + Kansal et al.)
         # P_cpu(t) = P_idle + (P_max - P_idle) × utilization
